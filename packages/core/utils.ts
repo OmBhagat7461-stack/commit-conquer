@@ -9,11 +9,16 @@ import { type ApiError, type PaginatedResponse } from "./types";
  * formatMoney(2999) → "$29.99"
  */
 export function formatMoney(cents: number, currency = "USD"): string {
+  const numeric =
+    typeof cents === "number" && isFinite(cents)
+      ? cents
+      : parseFloat(String(cents)) || 0;
+
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
     minimumFractionDigits: 2,
-  }).format(cents / 100);
+  }).format(numeric / 100);
 }
 
 /**
@@ -21,7 +26,14 @@ export function formatMoney(cents: number, currency = "USD"): string {
  * toCents("29.99") → 2999
  */
 export function toCents(dollars: number | string): number {
-  return Math.round(parseFloat(String(dollars)) * 100);
+  const numeric =
+    typeof dollars === "number" && isFinite(dollars)
+      ? dollars
+      : parseFloat(String(dollars));
+
+  if (!isFinite(numeric)) return 0;
+
+  return Math.round(numeric * 100);
 }
 
 // ─── String ───────────────────────────────────────────────────────────────────
