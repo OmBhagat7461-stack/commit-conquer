@@ -194,6 +194,7 @@ app.get("/health", (_req, res) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     version: "1.0.0-hackathon",
+    cache: ProductService.cacheStats(),
   });
 });
 

@@ -3,7 +3,51 @@
 import { type Product, type PaginatedResponse } from "../../core/types";
 import { paginate, stripEmpty } from "../../core/utils";
 import { eventBus, EVENT } from "../../core/event-bus";
+import { logger } from "../../core/logger";
+import { Cache } from "../../core/cache";
 import { ProductModel } from "./product.model";
+
+
+// ─── Cache Setup ──────────────────────────────────────────────────────────────
+//
+// Three separate caches, each tuned to the volatility of its data:
+//
+//  • productById    – individual product lookups; 5-minute TTL.
+//                     Invalidated on update / delete of that product.
+//
+//  • listResults    – paginated + filtered product lists; 2-minute TTL.
+//                     Invalidated entirely on any write (create/update/delete),
+//                     because a change to any product may affect any list page.
+//
+//  • categoryList   – category enumeration; 5-minute TTL.
+//                     Invalidated when a product's category changes.
+//
+// Keys:
+//   productById  → product_id  or  "handle:<handle>"
+//   listResults  → JSON.stringify of the normalised ListProductsInput
+//   categoryList → "all"
+
+const productCache   = new Cache<Product>({ ttl: 5 * 60 * 1000, name: "productById",  sweepIntervalMs: 60_000 });
+const listCache      = new Cache<PaginatedResponse<Product>>({ ttl: 2 * 60 * 1000, name: "productList",   sweepIntervalMs: 30_000 });
+const categoryCache  = new Cache<string[]>({ ttl: 5 * 60 * 1000, name: "categoryList", sweepIntervalMs: 60_000 });
+
+/** Build a stable, deterministic cache key from list inputs. */
+function _listKey(input: ListProductsInput): string {
+  return JSON.stringify({
+    offset:   input.offset   ?? 0,
+    limit:    input.limit    ?? 12,
+    status:   input.status   ?? "published",
+    category: input.category ?? "",
+    search:   input.search   ?? "",
+    sort:     input.sort     ?? "newest",
+  });
+}
+
+/** Drop every cached list page and the category list — called on any mutation. */
+function _invalidateWriteCaches(): void {
+  listCache.clear();
+  categoryCache.clear();
+}
 
 
 
@@ -50,6 +94,13 @@ export const ProductService = {
   
 
   list(input: ListProductsInput = {}): PaginatedResponse<Product> {
+    const key    = _listKey(input);
+    const cached = listCache.get(key);
+    if (cached) {
+      logger.info("Cache hit: product list", { key });
+      return cached;
+    }
+
     const {
       offset = 0,
       limit = 12,
@@ -87,23 +138,42 @@ export const ProductService = {
     products = _sort(products, sort);
 
 
-    return paginate(products, offset, limit);
+    const result = paginate(products, offset, limit);
+    listCache.set(key, result);
+    return result;
   },
 
   
 
   getById(id: string): Product {
+    const cached = productCache.get(id);
+    if (cached) {
+      logger.info("Cache hit: product by id", { id });
+      return cached;
+    }
+
     const product = ProductModel.findById(id);
     if (!product) throw new ServiceError("PRODUCT_NOT_FOUND", `Product ${id} not found`);
+
+    productCache.set(id, product);
     return product;
   },
 
 
   getByHandle(handle: string): Product {
+    const cacheKey = `handle:${handle}`;
+    const cached   = productCache.get(cacheKey);
+    if (cached) {
+      logger.info("Cache hit: product by handle", { handle });
+      return cached;
+    }
+
     const product = ProductModel.findByHandle(handle);
     if (!product) {
       throw new ServiceError("PRODUCT_NOT_FOUND", `Product with handle "${handle}" not found`);
     }
+
+    productCache.set(cacheKey, product);
     return product;
   },
 
@@ -130,6 +200,9 @@ export const ProductService = {
       })),
     });
 
+    // New product → invalidate list / category caches
+    _invalidateWriteCaches();
+
     await eventBus.emit(EVENT.PRODUCT_CREATED, {
       product_id: product.id,
       title:      product.title,
@@ -151,6 +224,11 @@ export const ProductService = {
       throw new ServiceError("UPDATE_FAILED", `Failed to update product ${id}`);
     }
 
+    // Evict the specific product entries + all list / category pages
+    productCache.delete(id);
+    productCache.delete(`handle:${updated.handle}`);
+    _invalidateWriteCaches();
+
     await eventBus.emit(EVENT.PRODUCT_UPDATED, {
       product_id: id,
       changes:    changes as Record<string, unknown>,
@@ -162,10 +240,15 @@ export const ProductService = {
   
 
   async delete(id: string): Promise<{ deleted: string }> {
-    ProductService.getById(id);   // throws if not found
+    const product = ProductService.getById(id);   // throws if not found
 
     const ok = ProductModel.delete(id);
     if (!ok) throw new ServiceError("DELETE_FAILED", `Failed to delete product ${id}`);
+
+    // Evict the specific product entries + all list / category pages
+    productCache.delete(id);
+    productCache.delete(`handle:${product.handle}`);
+    _invalidateWriteCaches();
 
     await eventBus.emit(EVENT.PRODUCT_DELETED, { product_id: id });
 
@@ -217,6 +300,12 @@ export const ProductService = {
       );
     }
 
+    // Inventory change mutates the product object — evict so stale data
+    // isn't served from the per-product cache.
+    productCache.delete(productId);
+    // Note: we intentionally do NOT clear listCache here — inventory_quantity
+    // is not part of list filtering/sorting, so list pages remain valid.
+
     const qty = variant.inventory_quantity;
 
     await eventBus.emit(EVENT.INVENTORY_UPDATED, {
@@ -246,9 +335,28 @@ export const ProductService = {
   
 
   categories(): string[] {
+    const cached = categoryCache.get("all");
+    if (cached) {
+      logger.info("Cache hit: categories");
+      return cached;
+    }
+
     const all = ProductModel.findAll();
     const set = new Set(all.map((p) => p.category).filter(Boolean) as string[]);
-    return [...set].sort();
+    const result = [...set].sort();
+
+    categoryCache.set("all", result);
+    return result;
+  },
+
+  // ─── Cache Inspection (for /health or /admin/stats) ──────────────────────
+
+  cacheStats() {
+    return {
+      products: productCache.size,
+      lists:    listCache.size,
+      categories: categoryCache.size,
+    };
   },
 };
 
