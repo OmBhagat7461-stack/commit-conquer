@@ -12,6 +12,7 @@ import {
   sleep,
 } from "../../core/utils";
 import { eventBus, EVENT } from "../../core/event-bus";
+import { logger } from "../../core/logger";
 import { ProductModel } from "../products/product.model";
 import { ServiceError } from "../products/product.service";
 
@@ -66,6 +67,15 @@ export const CartService = {
   get(cartId: string): Cart {
     const cart = carts.get(cartId);
     if (!cart) throw new ServiceError("CART_NOT_FOUND", `Cart ${cartId} not found`);
+
+    // Validate items against current product/variant data on every read
+    const validated = _validateCartItems(cart);
+    if (validated.changed) {
+      const updated = _recalc(validated.cart);
+      carts.set(cartId, updated);
+      return updated;
+    }
+
     return cart;
   },
 
@@ -256,7 +266,7 @@ export const CartService = {
   
 
   async complete(cartId: string): Promise<{ cart: Cart; order_id: string }> {
-    const cart = CartService.get(cartId);
+    const cart = CartService.get(cartId); // triggers validation
 
     
     if (!cart.email) {
@@ -267,6 +277,24 @@ export const CartService = {
     }
     if (cart.items.length === 0) {
       throw new ServiceError("EMPTY_CART", "Cannot complete an empty cart");
+    }
+
+    // Final stock check — prices were already synced by get(), but verify
+    // stock one more time at the moment of checkout.
+    for (const item of cart.items) {
+      const variant = ProductModel.findVariant(item.product_id, item.variant_id);
+      if (!variant) {
+        throw new ServiceError(
+          "VARIANT_NOT_FOUND",
+          `Variant "${item.variant_title}" is no longer available`,
+        );
+      }
+      if (variant.inventory_quantity < item.quantity) {
+        throw new ServiceError(
+          "INSUFFICIENT_STOCK",
+          `Only ${variant.inventory_quantity} units of "${item.variant_title}" available`,
+        );
+      }
     }
 
     
@@ -356,3 +384,118 @@ function _recalc(cart: Cart): Cart {
     updated_at:      new Date().toISOString(),
   };
 }
+
+// ─── Cart Item Validation ──────────────────────────────────────────────────────
+//
+// Checks every item in the cart against live product/variant data:
+//  1. Removes items whose product was deleted
+//  2. Removes items whose variant was removed from the product
+//  3. Syncs prices if the variant price changed
+//  4. Caps quantity to current available stock
+//  5. Updates product title / variant title / thumbnail if changed
+
+function _validateCartItems(cart: Cart): { cart: Cart; changed: boolean } {
+  let changed = false;
+  const validItems: CartItem[] = [];
+
+  for (const item of cart.items) {
+    const product = ProductModel.findById(item.product_id);
+
+    // Product was deleted or unpublished
+    if (!product || product.status !== "published") {
+      logger.warn("Cart item removed: product unavailable", {
+        cartId: cart.id,
+        productId: item.product_id,
+        reason: !product ? "deleted" : "unpublished",
+      });
+      changed = true;
+      continue;
+    }
+
+    const variant = product.variants.find((v) => v.id === item.variant_id);
+
+    // Variant was removed from the product
+    if (!variant) {
+      logger.warn("Cart item removed: variant no longer exists", {
+        cartId: cart.id,
+        productId: item.product_id,
+        variantId: item.variant_id,
+      });
+      changed = true;
+      continue;
+    }
+
+    // Sync price if it changed
+    if (item.price !== variant.price) {
+      logger.info("Cart item price updated", {
+        cartId: cart.id,
+        variantId: item.variant_id,
+        oldPrice: item.price,
+        newPrice: variant.price,
+      });
+      item.price = variant.price;
+      changed = true;
+    }
+
+    // Cap quantity to available stock
+    if (variant.inventory_quantity <= 0) {
+      logger.warn("Cart item removed: out of stock", {
+        cartId: cart.id,
+        variantId: item.variant_id,
+      });
+      changed = true;
+      continue;
+    }
+
+    if (item.quantity > variant.inventory_quantity) {
+      logger.warn("Cart item quantity capped to available stock", {
+        cartId: cart.id,
+        variantId: item.variant_id,
+        was: item.quantity,
+        now: variant.inventory_quantity,
+      });
+      item.quantity = variant.inventory_quantity;
+      changed = true;
+    }
+
+    // Sync title / thumbnail if they changed
+    if (item.title !== product.title) {
+      item.title = product.title;
+      changed = true;
+    }
+    if (item.variant_title !== variant.title) {
+      item.variant_title = variant.title;
+      changed = true;
+    }
+    if (item.thumbnail !== product.thumbnail) {
+      item.thumbnail = product.thumbnail;
+      changed = true;
+    }
+
+    validItems.push(item);
+  }
+
+  cart.items = validItems;
+  return { cart, changed };
+}
+
+// ─── Reactive Cart Cleanup via Events ──────────────────────────────────────────
+// When products are updated or deleted from the admin panel, proactively
+// validate every active cart so users see correct data on their next request.
+
+function _scrubAllCarts(): void {
+  for (const [cartId, cart] of carts) {
+    const { changed } = _validateCartItems(cart);
+    if (changed) {
+      carts.set(cartId, _recalc(cart));
+    }
+  }
+}
+
+eventBus.on(EVENT.PRODUCT_UPDATED, () => {
+  _scrubAllCarts();
+});
+
+eventBus.on(EVENT.PRODUCT_DELETED, () => {
+  _scrubAllCarts();
+});
