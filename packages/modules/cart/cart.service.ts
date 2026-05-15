@@ -15,21 +15,13 @@ import { eventBus, EVENT } from "../../core/event-bus";
 import { logger } from "../../core/logger";
 import { ProductModel } from "../products/product.model";
 import { ServiceError } from "../products/product.service";
+import { DiscountService } from "../discounts/discount.service";
 
 
 
 const SHIPPING_FLAT_RATE   = 599;   // $5.99 flat shipping in cents
 const FREE_SHIPPING_ABOVE  = 10000; // Free shipping over $100
 const TAX_RATE_PERCENT     = 8.875; // %
-
-
-
-const DISCOUNT_CODES: Record<string, { type: "percentage" | "fixed"; value: number }> = {
-  LAUNCH10:  { type: "percentage", value: 10 },
-  LAUNCH20:  { type: "percentage", value: 20 },
-  FLAT500:   { type: "fixed",      value: 500  },   // $5 off
-  FLAT1000:  { type: "fixed",      value: 1000 },   // $10 off
-};
 
 
 
@@ -200,19 +192,25 @@ export const CartService = {
 
   
 
-  async applyDiscount(cartId: string, code: string): Promise<Cart> {
+  async applyDiscount(cartId: string, code: string, customerId?: string): Promise<Cart> {
     const cart = CartService.get(cartId);
 
-    const discount = DISCOUNT_CODES[code.toUpperCase()];
-    if (!discount) {
-      throw new ServiceError("INVALID_DISCOUNT", `Discount code "${code}" is not valid`);
-    }
+    // Validate the discount code exists and is active
+    const rule = DiscountService.getByCode(code);
 
     if (cart.items.length === 0) {
       throw new ServiceError("EMPTY_CART", "Add items before applying a discount");
     }
 
-    cart.discount_code = code.toUpperCase();
+    // Per-customer eligibility check (if customer is known)
+    if (customerId) {
+      const eligibility = DiscountService.canCustomerUse(code, customerId);
+      if (!eligibility.allowed) {
+        throw new ServiceError("DISCOUNT_NOT_ELIGIBLE", eligibility.reason!);
+      }
+    }
+
+    cart.discount_code = rule.code;
 
     const updated = _recalc(cart);
     carts.set(cartId, updated);
@@ -265,8 +263,8 @@ export const CartService = {
 
   
 
-  async complete(cartId: string): Promise<{ cart: Cart; order_id: string }> {
-    const cart = CartService.get(cartId); // triggers validation
+  async complete(cartId: string, customerId?: string): Promise<{ cart: Cart; order_id: string }> {
+    const cart = CartService.get(cartId); // triggers item validation
 
     
     if (!cart.email) {
@@ -297,20 +295,54 @@ export const CartService = {
       }
     }
 
-    
-    await sleep(200);
+    // ── Atomic discount reservation ────────────────────────────────────────
+    // Reserve the discount BEFORE processing checkout.  This prevents a
+    // concurrent checkout (e.g. another browser tab) from racing past the
+    // per-customer usage check.
+    const resolvedCustomerId = customerId ?? cart.email;
+    let discountReserved = false;
 
-    const orderId = generateId("ord");
+    if (cart.discount_code && resolvedCustomerId) {
+      try {
+        DiscountService.reserve(cart.discount_code, resolvedCustomerId, cartId);
+        discountReserved = true;
+      } catch (err) {
+        // Reservation failed (already used, concurrent checkout, etc.)
+        // Strip the discount from the cart and let the customer know.
+        cart.discount_code = undefined;
+        cart.discount_amount = 0;
+        const recalced = _recalc(cart);
+        carts.set(cartId, recalced);
+        throw err;
+      }
+    }
 
-    await eventBus.emit(EVENT.CART_COMPLETED, {
-      cart_id:  cartId,
-      order_id: orderId,
-    });
+    try {
+      await sleep(200);
 
-    // Remove from active carts
-    carts.delete(cartId);
+      const orderId = generateId("ord");
 
-    return { cart, order_id: orderId };
+      // ── Commit discount redemption on success ──────────────────────────
+      if (discountReserved && cart.discount_code && resolvedCustomerId) {
+        DiscountService.commitRedemption(cart.discount_code, resolvedCustomerId, cartId);
+      }
+
+      await eventBus.emit(EVENT.CART_COMPLETED, {
+        cart_id:  cartId,
+        order_id: orderId,
+      });
+
+      // Remove from active carts
+      carts.delete(cartId);
+
+      return { cart, order_id: orderId };
+    } catch (err) {
+      // ── Release reservation on failure ──────────────────────────────────
+      if (discountReserved && cart.discount_code && resolvedCustomerId) {
+        DiscountService.releaseReservation(cart.discount_code, resolvedCustomerId, cartId);
+      }
+      throw err;
+    }
   },
 
   
@@ -358,9 +390,12 @@ function _recalc(cart: Cart): Cart {
   
   let discountAmount = 0;
   if (cart.discount_code) {
-    const rule = DISCOUNT_CODES[cart.discount_code];
-    if (rule) {
+    try {
+      const rule = DiscountService.getByCode(cart.discount_code);
       discountAmount = calcDiscount(subtotal, rule.type, rule.value);
+    } catch {
+      // Discount is no longer valid — strip it silently
+      cart.discount_code = undefined;
     }
   }
 
