@@ -6,6 +6,7 @@ import express, { Request, Response } from 'express';
 import { UserService } from './services/userService';
 import { CommitService } from './services/commitService';
 import { LeaderboardService } from './services/leaderboardService';
+import { ProgressionService } from './services/progressionService';
 import { UserController } from './controllers/userController';
 import { CommitController } from './controllers/commitController';
 import { authenticate } from './middleware/authenticate';
@@ -16,12 +17,13 @@ export function createApp() {
   const app = express();
   app.use(express.json());
 
-  const userService       = new UserService();
-  const commitService     = new CommitService();
+  const userService        = new UserService();
+  const commitService      = new CommitService();
   const leaderboardService = new LeaderboardService();
+  const progressionService = new ProgressionService();
 
   const userController   = new UserController(userService);
-  const commitController = new CommitController(commitService);
+  const commitController = new CommitController(commitService, progressionService);
 
   // ── User routes ────────────────────────────────────────────────────────────
   app.get('/api/users', (req, res, next) =>
@@ -58,12 +60,71 @@ export function createApp() {
     (req, res, next) => commitController.remove(req, res, next),
   );
 
+  // ── Issue / PR linking routes ──────────────────────────────────────────────
+  app.get('/api/issues/:ref/commits', async (req, res, next) => {
+    try {
+      const data = await commitService.findByIssue(req.params.ref);
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/pr/commits', async (req, res, next) => {
+    try {
+      const prUrl = req.query.url as string;
+      if (!prUrl) {
+        return res.status(400).json({ success: false, error: 'url query param required' });
+      }
+      const data = await commitService.findByPr(prUrl);
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+  // ── Progression routes ─────────────────────────────────────────────────────
+  app.get('/api/progression/levels', (_req, res) => {
+    const table = progressionService.getLevelTable();
+    res.json({ success: true, data: table });
+  });
+
+  app.get('/api/progression/:userId', async (req, res, next) => {
+    try {
+      const data = await progressionService.getProgression(req.params.userId);
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/progression/:userId/milestones', async (req, res, next) => {
+    try {
+      const data = await progressionService.getMilestones(req.params.userId);
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ── Leaderboard routes ─────────────────────────────────────────────────────
   app.get('/api/leaderboard', async (req, res, next) => {
     try {
       const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 10;
       const data  = await leaderboardService.getLeaderboard(limit);
-      res.json({ success: true, data });
+
+      // Enrich leaderboard entries with progression data
+      const enriched = await Promise.all(
+        data.map(async (entry) => {
+          const prog = await progressionService.getProgression(entry.userId);
+          return {
+            ...entry,
+            level: prog.level,
+            title: prog.title,
+          };
+        }),
+      );
+
+      res.json({ success: true, data: enriched });
     } catch (err) {
       next(err);
     }
@@ -75,7 +136,13 @@ export function createApp() {
       if (!data) {
         return res.status(404).json({ success: false, error: 'User not ranked' });
       }
-      res.json({ success: true, data });
+
+      // Enrich with progression
+      const prog = await progressionService.getProgression(req.params.userId);
+      res.json({
+        success: true,
+        data: { ...data, level: prog.level, title: prog.title },
+      });
     } catch (err) {
       next(err);
     }
@@ -90,4 +157,4 @@ export function createApp() {
   app.use(errorHandler);
 
   return app;
-}
+}

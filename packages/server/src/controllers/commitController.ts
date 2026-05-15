@@ -4,10 +4,14 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { CommitService } from '../services/commitService';
+import { ProgressionService } from '../services/progressionService';
 import { parsePagination } from '../utils/pagination';
 
 export class CommitController {
-  constructor(private service: CommitService) {}
+  constructor(
+    private service: CommitService,
+    private progression: ProgressionService,
+  ) {}
 
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -32,8 +36,18 @@ export class CommitController {
 
   async create(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const data = await this.service.create(req.body);
-      res.status(201).json({ success: true, data });
+      const commit = await this.service.create(req.body);
+
+      // Award XP and update progression if the commit has an author
+      let progression = undefined;
+      if (commit.authorId) {
+        progression = await this.progression.recordCommit(
+          commit.authorId,
+          commit.points,
+        );
+      }
+
+      res.status(201).json({ success: true, data: commit, progression });
     } catch (err) {
       next(err);
     }
@@ -49,4 +63,4 @@ export class CommitController {
       next(err);
     }
   }
-}
+}
