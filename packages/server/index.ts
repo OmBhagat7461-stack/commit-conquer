@@ -298,6 +298,44 @@ store.post("/auth/google", async (req, res) => {
   } catch (e) { handleErr(e, res); }
 });
 
+// ── Google OAuth Redirect Flow ───────────────────────────────────────────────
+// GET  /auth/google/redirect  → redirects user to Google consent screen
+// GET  /auth/google/callback  → Google redirects back here with ?code=...
+
+import { buildGoogleConsentUrl, exchangeGoogleCode, GoogleAuthError } from "../core/google-oauth";
+
+store.get("/auth/google/redirect", (_req, res) => {
+  try {
+    const url = buildGoogleConsentUrl();
+    res.redirect(url);
+  } catch (e) {
+    if (e instanceof GoogleAuthError && e.code === "NOT_CONFIGURED") {
+      res.status(503).json({
+        error: "Google OAuth is not configured",
+        setup: "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env — see .env.example",
+      });
+    } else {
+      handleErr(e, res);
+    }
+  }
+});
+
+store.get("/auth/google/callback", async (req, res) => {
+  try {
+    const code = req.query.code as string;
+    if (!code) {
+      return res.status(400).json({ error: "Missing authorization code" });
+    }
+
+    // Exchange code for tokens
+    const tokens = await exchangeGoogleCode(code);
+
+    // Use the ID token to log in / create account
+    const result = await AuthService.googleLogin(tokens.id_token);
+    res.json(result);
+  } catch (e) { handleErr(e, res); }
+});
+
 store.post("/auth/refresh", async (req, res) => {
   try {
     const result = await AuthService.refreshSession(req.body.refresh_token);

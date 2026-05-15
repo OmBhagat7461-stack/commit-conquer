@@ -2,6 +2,7 @@ import { type Customer, type AuthSession } from "../../core/types";
 import { generateId, isValidEmail, sleep } from "../../core/utils";
 import { eventBus, EVENT } from "../../core/event-bus";
 import { logger } from "../../core/logger";
+import { verifyGoogleToken, GoogleAuthError } from "../../core/google-oauth";
 import { ServiceError } from "../products/product.service";
 
 export interface RegisterInput {
@@ -380,14 +381,18 @@ export const AuthService = {
   async googleLogin(
     googleToken: string,
   ): Promise<{ customer: Customer; token: string; refresh_token: string }> {
-    const payload = _decodeGoogleToken(googleToken);
-
-    const email = payload.email;
-    if (!email) {
-      throw new ServiceError("VALIDATION_ERROR", "Google account has no email");
+    // Verify the token against Google's public infrastructure
+    let payload;
+    try {
+      payload = await verifyGoogleToken(googleToken);
+    } catch (err) {
+      if (err instanceof GoogleAuthError) {
+        throw new ServiceError(err.code, err.message);
+      }
+      throw err;
     }
 
-    const emailKey = email.toLowerCase().trim();
+    const emailKey = payload.email.toLowerCase().trim();
     let record = customersByEmail.get(emailKey);
 
     if (!record) {
@@ -559,15 +564,5 @@ function _validateRegister(input: RegisterInput): void {
   _validatePasswordStrength(input.password);
 }
 
-function _decodeGoogleToken(token: string): Record<string, any> {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) {
-      throw new Error("Invalid JWT");
-    }
-    const decoded = Buffer.from(parts[1], "base64url").toString("utf8");
-    return JSON.parse(decoded);
-  } catch {
-    throw new ServiceError("VALIDATION_ERROR", "Invalid Google token");
-  }
-}
+// _decodeGoogleToken has been replaced by verifyGoogleToken in packages/core/google-oauth.ts
+// which validates issuer, audience, expiry, and calls Google's tokeninfo endpoint.

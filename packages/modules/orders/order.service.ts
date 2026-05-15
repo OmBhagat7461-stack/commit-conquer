@@ -204,7 +204,8 @@ export const OrderService = {
   getById(id: string): Order {
     const order = orders.get(id);
     if (!order) throw new ServiceError("ORDER_NOT_FOUND", `Order ${id} not found`);
-    return order;
+    // Return a snapshot — callers must not mutate internal state directly
+    return JSON.parse(JSON.stringify(order));
   },
 
 

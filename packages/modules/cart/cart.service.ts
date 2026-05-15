@@ -332,10 +332,15 @@ export const CartService = {
         order_id: orderId,
       });
 
+      // Snapshot the cart BEFORE deleting — OrderService.place() reads
+      // this reference after multiple awaits, so it must be a detached
+      // deep copy, not a live reference that event handlers could mutate.
+      const cartSnapshot: Cart = JSON.parse(JSON.stringify(cart));
+
       // Remove from active carts
       carts.delete(cartId);
 
-      return { cart, order_id: orderId };
+      return { cart: cartSnapshot, order_id: orderId };
     } catch (err) {
       // ── Release reservation on failure ──────────────────────────────────
       if (discountReserved && cart.discount_code && resolvedCustomerId) {
