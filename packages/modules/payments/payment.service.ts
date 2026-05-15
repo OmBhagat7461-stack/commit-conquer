@@ -3,6 +3,7 @@
 import { type PaymentSession, type Refund } from "../../core/types";
 import { generateId, formatMoney, sleep } from "../../core/utils";
 import { eventBus, EVENT } from "../../core/event-bus";
+import { logger } from "../../core/logger";
 import { ServiceError } from "../products/product.service";
 
 
@@ -255,7 +256,9 @@ export const PaymentService = {
     signature: string,
   ): Promise<{ received: boolean }> {
     
-    console.log("[PaymentService] Stripe webhook received (mock):", signature.slice(0, 20));
+    logger.info("Stripe webhook received (mock)", {
+      signaturePrefix: signature.slice(0, 20),
+    });
     return { received: true };
   },
 

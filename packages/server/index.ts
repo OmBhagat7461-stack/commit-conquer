@@ -8,8 +8,8 @@ import express, {
 } from "express";
 import cors from "cors";
 import helmet from "helmet";
-import morgan from "morgan";
 import "dotenv/config";
+import { logger } from "../core/logger.ts";
 
 
 import { ProductService, ServiceError } from "../modules/products/product.service.ts";
@@ -37,7 +37,40 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization", "X-Admin-Secret", "X-Cart-Id"],
 }));
 app.use(express.json({ limit: "2mb" }));
-app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
+
+// ─── Request Tracking Middleware ──────────────────────────────────────────────
+// Assigns a correlation ID, measures latency, and emits a structured log
+// entry for every request/response cycle.
+let _reqCounter = 0;
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const requestId = `req_${Date.now()}_${++_reqCounter}`;
+  const start = process.hrtime.bigint();
+
+  // Attach for downstream usage (error handlers, child loggers, etc.)
+  (req as any).requestId = requestId;
+
+  // Set response header so clients/support can reference the ID
+  res.setHeader("X-Request-Id", requestId);
+
+  res.on("finish", () => {
+    const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+    const level = res.statusCode >= 500 ? "error"
+               : res.statusCode >= 400 ? "warn"
+               : "info";
+
+    logger[level]("request completed", {
+      requestId,
+      method: req.method,
+      path: req.originalUrl,
+      status: res.statusCode,
+      durationMs: Math.round(durationMs * 100) / 100,
+      userAgent: req.get("user-agent"),
+      ip: req.ip,
+    });
+  });
+
+  next();
+});
 
 
 
@@ -92,13 +125,38 @@ function err(code: string, message: string) {
   return { error: { code, message } };
 }
 
-function handleErr(e: unknown, res: Response) {
+function handleErr(e: unknown, res: Response, req?: Request) {
   if (e instanceof ServiceError) {
     const status = STATUS_MAP[e.code] ?? 400;
+
+    // Log client/validation errors at warn, server errors at error
+    if (status >= 500) {
+      logger.error("Service error", {
+        requestId: (req as any)?.requestId,
+        errorCode: e.code,
+        message: e.message,
+        path: req?.originalUrl,
+      });
+    } else if (status >= 400) {
+      logger.warn("Client error", {
+        requestId: (req as any)?.requestId,
+        errorCode: e.code,
+        message: e.message,
+        path: req?.originalUrl,
+      });
+    }
+
     res.status(status).json(err(e.code, e.message));
     return;
   }
-  console.error("[Server] Unexpected error:", e);
+
+  // Unexpected / unhandled errors — always log with full stack
+  logger.error("Unexpected server error", {
+    requestId: (req as any)?.requestId,
+    error: e instanceof Error ? e.message : String(e),
+    stack: e instanceof Error ? e.stack : undefined,
+    path: req?.originalUrl,
+  });
   res.status(500).json(err("INTERNAL_ERROR", "An unexpected error occurred"));
 }
 
@@ -586,14 +644,12 @@ admin.post("/shipping-options", async (req, res) => {
     res.status(201).json({ shipping_option: option });
   } catch (e) { handleErr(e, res); }
 });
-if (process.env.NODE_ENV !== "production") {
-  // Subscribe to every event and log it
-  const ALL_EVENTS = Object.values(EVENT);
-  for (const event of ALL_EVENTS) {
-    eventBus.on(event, (payload) => {
-      console.log(`[EventBus] ${event}`, JSON.stringify(payload, null, 2));
-    });
-  }
+// Subscribe to every event and log it (structured)
+const ALL_EVENTS = Object.values(EVENT);
+for (const event of ALL_EVENTS) {
+  eventBus.on(event, (payload) => {
+    logger.info(`Event emitted: ${event}`, { event, payload });
+  });
 }
 
 
@@ -602,22 +658,18 @@ app.use((_req, res) => {
 });
 
 
-app.use((e: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  handleErr(e, res);
+app.use((e: unknown, req: Request, res: Response, _next: NextFunction) => {
+  handleErr(e, res, req);
 });
 
 app.listen(PORT, () => {
-  console.log(`
-  ┌──────────────────────────────────────────┐
-  │   commit&conquer API                     │
-  │                                          │
-  │   Store:  http://localhost:${PORT}/api/store  │
-  │   Admin:  http://localhost:${PORT}/api/admin  │
-  │   Health: http://localhost:${PORT}/health     │
-  │                                          │
-  │   ENV: ${process.env.NODE_ENV ?? "development"}                     │
-  └──────────────────────────────────────────┘
-  `);
+  logger.info("Server started", {
+    port: PORT,
+    env: process.env.NODE_ENV ?? "development",
+    storeUrl: `http://localhost:${PORT}/api/store`,
+    adminUrl: `http://localhost:${PORT}/api/admin`,
+    healthUrl: `http://localhost:${PORT}/health`,
+  });
 });
 
 export default app;

@@ -1,6 +1,7 @@
 import { type Customer, type AuthSession } from "../../core/types";
 import { generateId, isValidEmail, sleep } from "../../core/utils";
 import { eventBus, EVENT } from "../../core/event-bus";
+import { logger } from "../../core/logger";
 import { ServiceError } from "../products/product.service";
 
 export interface RegisterInput {
@@ -287,9 +288,10 @@ export const AuthService = {
       email: emailKey,
     });
 
-    console.log(
-      `[AuthService] Password reset token for ${emailKey}: ${reset_token}`,
-    );
+    logger.info("Password reset token generated", {
+      email: emailKey,
+      customerId: record.customer.id,
+    });
 
     return { reset_token };
   },

@@ -8,6 +8,7 @@ import {
 } from "../../core/types";
 import { generateId, paginate, formatMoney, sleep } from "../../core/utils";
 import { eventBus, EVENT } from "../../core/event-bus";
+import { logger } from "../../core/logger";
 import { ServiceError } from "../products/product.service";
 import { ProductService } from "../products/product.service";
 import { CartService } from "../cart/cart.service";
@@ -254,10 +255,12 @@ export const OrderService = {
           -item.quantity,
         );
       } catch (err) {
-        console.warn(
-          `[OrderService] inventory adjustment failed for variant ${item.variant_id}:`,
-          err,
-        );
+        logger.warn("Inventory adjustment failed during order placement", {
+          variantId: item.variant_id,
+          productId: item.product_id,
+          quantity: -item.quantity,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
@@ -365,7 +368,13 @@ export const OrderService = {
           +item.quantity,  // positive = restock
         );
       } catch (err) {
-        console.warn(`[OrderService] restock failed for variant ${item.variant_id}:`, err);
+        logger.warn("Restock failed during order cancellation", {
+          variantId: item.variant_id,
+          productId: item.product_id,
+          quantity: item.quantity,
+          orderId: orderId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 

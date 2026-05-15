@@ -4,6 +4,8 @@
 
 type Handler<T = unknown> = (payload: T) => void | Promise<void>;
 
+import { logger } from "./logger";
+
 interface Subscription {
   event: string;
   handler: Handler<any>;
@@ -170,10 +172,11 @@ class EventBus {
       try {
         await handler(payload);
       } catch (err) {
-        console.error(
-          `[EventBus] Handler error on "${event}":`,
-          err instanceof Error ? err.message : err,
-        );
+        logger.error(`EventBus handler error on "${event}"`, {
+          event,
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        });
       }
     });
 
@@ -189,7 +192,10 @@ class EventBus {
     payload: EventPayloadMap[E],
   ): void {
     this.emit(event, payload).catch((err) =>
-      console.error("[EventBus] emitSync unhandled:", err),
+      logger.error("EventBus emitSync unhandled error", {
+        event,
+        error: err instanceof Error ? err.message : String(err),
+      }),
     );
   }
 
