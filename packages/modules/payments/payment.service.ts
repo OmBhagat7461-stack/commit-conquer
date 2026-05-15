@@ -38,14 +38,23 @@ const refunds  = new Map<string, Refund>();
 
 const orderSessionIndex = new Map<string, string>();
 
-// ─── Session Cleanup ──────────────────────────────────────────────────────────
-// Track when each session was created so we can evict stale ones.
+// ─── Session & Refund Cleanup ─────────────────────────────────────────────────
+// Track creation timestamps so we can evict stale entries.
 const sessionCreatedAt = new Map<string, number>();
+const refundCreatedAt  = new Map<string, number>();
 
-// Sessions in terminal states (captured, cancelled) older than this are eligible
-// for cleanup.  Keeping them for 24 h gives ample time for webhooks / retries.
+// Maps each refund to the session it belongs to, so cleanup doesn't depend on
+// the (potentially overwritten) orderSessionIndex.
+const refundSessionIndex = new Map<string, string>();
+
+// Sessions in terminal states (captured, cancelled, refunded) older than this
+// are eligible for cleanup.  24 h gives ample time for webhooks / retries.
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Orphaned refunds (whose session is already gone) older than this are cleaned.
+const REFUND_TTL_MS  = 24 * 60 * 60 * 1000; // 24 hours
 const CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // run every 10 minutes
+// Safety cap – if we exceed this, force-clean oldest terminal sessions first.
+const MAX_SESSIONS = 10_000;
 
 /**
  * Purge payment sessions (and their linked refunds / index entries) that have
@@ -53,42 +62,82 @@ const CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // run every 10 minutes
  */
 function _cleanupStaleSessions(): void {
   const now = Date.now();
-  const terminalStatuses = new Set(["captured", "cancelled"]);
-  let cleaned = 0;
+  const terminalStatuses = new Set(["captured", "cancelled", "refunded"]);
+  let cleanedSessions = 0;
+  let cleanedRefunds  = 0;
 
+  // 1. Evict terminal sessions that have exceeded the TTL
   for (const [sessionId, session] of sessions) {
     const createdAt = sessionCreatedAt.get(sessionId) ?? 0;
     if (!terminalStatuses.has(session.status)) continue;
     if (now - createdAt < SESSION_TTL_MS) continue;
 
-    // Remove the session
-    sessions.delete(sessionId);
-    sessionCreatedAt.delete(sessionId);
-
-    // Remove refunds linked to this session's order
-    for (const [refundId, refund] of refunds) {
-      const linkedSessionId = orderSessionIndex.get(refund.order_id);
-      if (linkedSessionId === sessionId) {
-        refunds.delete(refundId);
-      }
-    }
-
-    // Remove the order→session index entry
-    for (const [orderId, sid] of orderSessionIndex) {
-      if (sid === sessionId) {
-        orderSessionIndex.delete(orderId);
-      }
-    }
-
-    cleaned++;
+    _deleteSession(sessionId);
+    cleanedSessions++;
   }
 
-  if (cleaned > 0) {
+  // 2. Evict orphaned refunds whose session was already removed or whose own
+  //    TTL has expired.  This catches refunds that were orphaned when
+  //    orderSessionIndex was overwritten by a re-initiated payment.
+  for (const [refundId] of refunds) {
+    const parentSessionId = refundSessionIndex.get(refundId);
+    const parentGone      = !parentSessionId || !sessions.has(parentSessionId);
+    const age             = now - (refundCreatedAt.get(refundId) ?? 0);
+
+    if (parentGone && age >= REFUND_TTL_MS) {
+      refunds.delete(refundId);
+      refundCreatedAt.delete(refundId);
+      refundSessionIndex.delete(refundId);
+      cleanedRefunds++;
+    }
+  }
+
+  // 3. Safety valve – if we are over the cap, force-evict oldest terminal
+  //    sessions regardless of TTL.
+  if (sessions.size > MAX_SESSIONS) {
+    const overflowEntries = [...sessionCreatedAt.entries()]
+      .filter(([sid]) => {
+        const s = sessions.get(sid);
+        return s && terminalStatuses.has(s.status);
+      })
+      .sort((a, b) => a[1] - b[1]); // oldest first
+
+    const toRemove = sessions.size - MAX_SESSIONS;
+    for (let i = 0; i < Math.min(toRemove, overflowEntries.length); i++) {
+      _deleteSession(overflowEntries[i][0]);
+      cleanedSessions++;
+    }
+  }
+
+  if (cleanedSessions > 0 || cleanedRefunds > 0) {
     logger.info("Payment session cleanup completed", {
-      removedSessions: cleaned,
+      removedSessions: cleanedSessions,
+      removedRefunds:  cleanedRefunds,
       remainingSessions: sessions.size,
       remainingRefunds: refunds.size,
     });
+  }
+}
+
+/** Remove a single session and all its associated index / refund entries. */
+function _deleteSession(sessionId: string): void {
+  sessions.delete(sessionId);
+  sessionCreatedAt.delete(sessionId);
+
+  // Remove refunds linked to this session (via direct index, not orderSessionIndex)
+  for (const [refundId, sid] of refundSessionIndex) {
+    if (sid === sessionId) {
+      refunds.delete(refundId);
+      refundCreatedAt.delete(refundId);
+      refundSessionIndex.delete(refundId);
+    }
+  }
+
+  // Remove order→session index entries pointing to this session
+  for (const [orderId, sid] of orderSessionIndex) {
+    if (sid === sessionId) {
+      orderSessionIndex.delete(orderId);
+    }
   }
 }
 
@@ -271,11 +320,13 @@ export const PaymentService = {
     };
 
     refunds.set(refund.id, refund);
+    refundCreatedAt.set(refund.id, Date.now());
+    refundSessionIndex.set(refund.id, session_id);
 
     
     const newTotal = alreadyRefunded + amount;
     if (newTotal >= session.amount) {
-      session.status = "captured"; 
+      session.status = "refunded";
     }
     sessions.set(session_id, session);
 
@@ -324,13 +375,9 @@ export const PaymentService = {
   
 
   getRefunds(sessionId: string): Refund[] {
-    return [...refunds.values()].filter(
-      (r) => {
-        
-        const sid = orderSessionIndex.get(r.order_id);
-        return sid === sessionId;
-      },
-    );
+    return [...refunds.entries()]
+      .filter(([refundId]) => refundSessionIndex.get(refundId) === sessionId)
+      .map(([, refund]) => refund);
   },
 
   
@@ -386,10 +433,7 @@ export const PaymentService = {
 
 
 function _totalRefunded(sessionId: string): number {
-  return [...refunds.values()]
-    .filter((r) => {
-      const sid = orderSessionIndex.get(r.order_id);
-      return sid === sessionId;
-    })
-    .reduce((sum, r) => sum + r.amount, 0);
+  return [...refunds.entries()]
+    .filter(([refundId]) => refundSessionIndex.get(refundId) === sessionId)
+    .reduce((sum, [, r]) => sum + r.amount, 0);
 }

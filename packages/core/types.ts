@@ -128,7 +128,7 @@ export interface AuthSession {
 export interface PaymentSession {
   id: string;
   provider_id: "stripe" | "manual";
-  status: "pending" | "authorized" | "captured" | "error" | "cancelled";
+  status: "pending" | "authorized" | "captured" | "error" | "cancelled" | "refunded";
   amount: number;
   data: Record<string, unknown>; // provider-specific (e.g. Stripe client_secret)
 }
