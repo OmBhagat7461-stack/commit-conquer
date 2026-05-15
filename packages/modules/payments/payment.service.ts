@@ -38,7 +38,65 @@ const refunds  = new Map<string, Refund>();
 
 const orderSessionIndex = new Map<string, string>();
 
+// ─── Session Cleanup ──────────────────────────────────────────────────────────
+// Track when each session was created so we can evict stale ones.
+const sessionCreatedAt = new Map<string, number>();
 
+// Sessions in terminal states (captured, cancelled) older than this are eligible
+// for cleanup.  Keeping them for 24 h gives ample time for webhooks / retries.
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // run every 10 minutes
+
+/**
+ * Purge payment sessions (and their linked refunds / index entries) that have
+ * reached a terminal state and exceeded the retention TTL.
+ */
+function _cleanupStaleSessions(): void {
+  const now = Date.now();
+  const terminalStatuses = new Set(["captured", "cancelled"]);
+  let cleaned = 0;
+
+  for (const [sessionId, session] of sessions) {
+    const createdAt = sessionCreatedAt.get(sessionId) ?? 0;
+    if (!terminalStatuses.has(session.status)) continue;
+    if (now - createdAt < SESSION_TTL_MS) continue;
+
+    // Remove the session
+    sessions.delete(sessionId);
+    sessionCreatedAt.delete(sessionId);
+
+    // Remove refunds linked to this session's order
+    for (const [refundId, refund] of refunds) {
+      const linkedSessionId = orderSessionIndex.get(refund.order_id);
+      if (linkedSessionId === sessionId) {
+        refunds.delete(refundId);
+      }
+    }
+
+    // Remove the order→session index entry
+    for (const [orderId, sid] of orderSessionIndex) {
+      if (sid === sessionId) {
+        orderSessionIndex.delete(orderId);
+      }
+    }
+
+    cleaned++;
+  }
+
+  if (cleaned > 0) {
+    logger.info("Payment session cleanup completed", {
+      removedSessions: cleaned,
+      remainingSessions: sessions.size,
+      remainingRefunds: refunds.size,
+    });
+  }
+}
+
+// Start periodic cleanup (unref so it doesn't block process exit)
+const _cleanupTimer = setInterval(_cleanupStaleSessions, CLEANUP_INTERVAL_MS);
+if (typeof _cleanupTimer.unref === "function") {
+  _cleanupTimer.unref();
+}
 
 export const PaymentService = {
 
@@ -95,6 +153,7 @@ export const PaymentService = {
     }
 
     sessions.set(session.id, session);
+    sessionCreatedAt.set(session.id, Date.now());
     orderSessionIndex.set(order_id, session.id);
 
     await eventBus.emit(EVENT.PAYMENT_INITIATED, {
