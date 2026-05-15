@@ -12,6 +12,7 @@ import { logger } from "../../core/logger";
 import { ServiceError } from "../products/product.service";
 import { ProductService } from "../products/product.service";
 import { CartService } from "../cart/cart.service";
+import { PaymentService } from "../payments/payment.service";
 
 
 export interface ListOrdersInput {
@@ -287,17 +288,123 @@ export const OrderService = {
       );
     }
 
-    await sleep(300); 
+    // ── Step 1: Capture payment if not already captured ──────────────────
+    const paymentSession = PaymentService.getSessionByOrderId(orderId);
+    let paymentCaptured = false;
 
-    const updated = _update(orderId, {
-      status:             "processing",
-      fulfillment_status: "fulfilled",
-      payment_status:     "captured",
-    });
+    if (paymentSession && paymentSession.status !== "captured") {
+      try {
+        await PaymentService.capture({
+          session_id: paymentSession.id,
+          order_id: orderId,
+        });
+        paymentCaptured = true;
 
-    await eventBus.emit(EVENT.ORDER_FULFILLED, { order_id: orderId });
+        // Mark payment captured on the order immediately
+        _update(orderId, { payment_status: "captured" });
+      } catch (err) {
+        logger.error("Payment capture failed during fulfillment", {
+          orderId,
+          sessionId: paymentSession.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw new ServiceError(
+          "PAYMENT_CAPTURE_FAILED",
+          "Cannot fulfill order — payment capture failed",
+        );
+      }
+    } else if (paymentSession?.status === "captured") {
+      paymentCaptured = true;
+    }
 
-    return updated;
+    // ── Step 2: Attempt fulfillment ──────────────────────────────────────
+    try {
+      await sleep(300);
+
+      const updated = _update(orderId, {
+        status:             "processing",
+        fulfillment_status: "fulfilled",
+        payment_status:     "captured",
+      });
+
+      await eventBus.emit(EVENT.ORDER_FULFILLED, { order_id: orderId });
+
+      return updated;
+    } catch (fulfillErr) {
+      // ── Step 3: Auto-refund if fulfillment fails after charge ────────
+      // This is the critical safety net — if we captured money but can't
+      // fulfill, we MUST refund the customer.
+      if (paymentCaptured && paymentSession) {
+        logger.error("Fulfillment failed after payment capture — issuing automatic refund", {
+          orderId,
+          sessionId: paymentSession.id,
+          amount: paymentSession.amount,
+          fulfillError: fulfillErr instanceof Error ? fulfillErr.message : String(fulfillErr),
+        });
+
+        try {
+          await PaymentService.refund({
+            session_id: paymentSession.id,
+            order_id: orderId,
+            amount: paymentSession.amount,
+            reason: "fulfillment_failed",
+          });
+
+          _update(orderId, {
+            status:         "cancelled",
+            payment_status: "refunded",
+            fulfillment_status: "not_fulfilled",
+          });
+
+          // Restock inventory since order won't be fulfilled
+          for (const item of order.items) {
+            try {
+              await ProductService.adjustInventory(
+                item.product_id,
+                item.variant_id,
+                +item.quantity,
+              );
+            } catch (restockErr) {
+              logger.warn("Restock failed during auto-refund", {
+                orderId,
+                variantId: item.variant_id,
+                error: restockErr instanceof Error ? restockErr.message : String(restockErr),
+              });
+            }
+          }
+
+          await eventBus.emit(EVENT.ORDER_REFUNDED, {
+            order_id: orderId,
+            amount: paymentSession.amount,
+            reason: "fulfillment_failed",
+          });
+
+          logger.info("Auto-refund completed successfully", {
+            orderId,
+            refundedAmount: paymentSession.amount,
+          });
+        } catch (refundErr) {
+          // CRITICAL: Refund also failed — log for manual intervention
+          logger.error("CRITICAL: Auto-refund FAILED after fulfillment failure — manual intervention required", {
+            orderId,
+            sessionId: paymentSession.id,
+            chargedAmount: paymentSession.amount,
+            fulfillError: fulfillErr instanceof Error ? fulfillErr.message : String(fulfillErr),
+            refundError: refundErr instanceof Error ? refundErr.message : String(refundErr),
+          });
+
+          _update(orderId, {
+            status: "requires_action",
+            fulfillment_status: "not_fulfilled",
+          });
+        }
+      }
+
+      throw new ServiceError(
+        "FULFILLMENT_FAILED",
+        "Order fulfillment failed — payment has been refunded",
+      );
+    }
   },
 
   
@@ -360,6 +467,47 @@ export const OrderService = {
 
     await sleep(300);
 
+    // ── Auto-refund captured payment on cancellation ───────────────────
+    const paymentSession = PaymentService.getSessionByOrderId(orderId);
+    let refundIssued = false;
+
+    if (paymentSession && paymentSession.status === "captured") {
+      try {
+        await PaymentService.refund({
+          session_id: paymentSession.id,
+          order_id: orderId,
+          amount: paymentSession.amount,
+          reason: reason ?? "order_cancelled",
+        });
+        refundIssued = true;
+
+        logger.info("Payment refunded on order cancellation", {
+          orderId,
+          sessionId: paymentSession.id,
+          amount: paymentSession.amount,
+        });
+      } catch (refundErr) {
+        logger.error("Refund failed during order cancellation — manual intervention required", {
+          orderId,
+          sessionId: paymentSession.id,
+          amount: paymentSession.amount,
+          error: refundErr instanceof Error ? refundErr.message : String(refundErr),
+        });
+        // Don't block cancellation — mark as requires_action
+      }
+    } else if (paymentSession && ["pending", "authorized"].includes(paymentSession.status)) {
+      // Payment not yet captured — just cancel the session
+      try {
+        await PaymentService.cancelSession(paymentSession.id, orderId);
+      } catch (cancelErr) {
+        logger.warn("Payment session cancel failed", {
+          orderId,
+          sessionId: paymentSession.id,
+          error: cancelErr instanceof Error ? cancelErr.message : String(cancelErr),
+        });
+      }
+    }
+
     // Re-stock inventory
     for (const item of order.items) {
       try {
@@ -382,9 +530,10 @@ export const OrderService = {
     const updated = _update(orderId, {
       status:            "cancelled",
       fulfillment_status: "not_fulfilled",
+      payment_status:    refundIssued ? "refunded" : (paymentSession?.status === "captured" ? "requires_action" : order.payment_status),
     });
 
-    await eventBus.emit(EVENT.ORDER_CANCELLED, { order_id: orderId, reason });
+    await eventBus.emit(EVENT.ORDER_CANCELLED, { order_id: orderId, reason, refunded: refundIssued });
 
     return updated;
   },
