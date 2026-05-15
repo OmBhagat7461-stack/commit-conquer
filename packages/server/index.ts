@@ -8,8 +8,26 @@ import express, {
 } from "express";
 import cors from "cors";
 import helmet from "helmet";
-import "dotenv/config";
-import { logger } from "../core/logger.ts";
+import morgan from "morgan";
+import path from "path";
+import dotenv from "dotenv";
+dotenv.config({ path: path.join(__dirname, ".env") });
+
+
+// ─── Env Validation ───────────────────────────────────────────────────────────
+const REQUIRED_ENV_VARS = ["STRIPE_KEY", "DB_URL"];
+const missingVars = REQUIRED_ENV_VARS.filter(v => !process.env[v]);
+
+if (missingVars.length > 0) {
+  console.error(`
+  ❌ ERROR: Missing required environment variables:
+     ${missingVars.join(", ")}
+
+     The server cannot start without these. Please check your .env file.
+  `);
+  process.exit(1);
+}
+
 
 
 import { ProductService, ServiceError } from "../modules/products/product.service.ts";
@@ -199,7 +217,7 @@ app.get("/health", (_req, res) => {
 });
 
 const store = express.Router();
-app.use("/api/store", store);
+app.use("/api/v1/store", store);
 
 
 
@@ -452,7 +470,7 @@ store.get("/inventory/:variantId", (req, res) => {
 
 const admin = express.Router();
 admin.use(adminOnly);
-app.use("/api/admin", admin);
+app.use("/api/v1/admin", admin);
 
 
 
