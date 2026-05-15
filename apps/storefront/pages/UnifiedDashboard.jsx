@@ -418,8 +418,8 @@ function StorefrontPage() {
     showToast(`${p.title} added to cart`);
   };
 
-  const cartCount = cart.reduce((n, i) => n + i.qty, 0);
-  const cartTotal = cart.reduce((s, i) => s + i.price * i.qty * 100, 0);
+  const cartCount = cart.reduce((n, i) => n + (Number(i.qty) || 0), 0);
+  const cartTotal = cart.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.qty) || 0) * 100, 0);
 
   return (
     <div>

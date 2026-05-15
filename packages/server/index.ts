@@ -10,6 +10,11 @@ import cors from "cors";
 import helmet from "helmet";
 import "dotenv/config";
 import { logger } from "../core/logger.ts";
+import { enforceEnv } from "./src/validateEnv";
+
+// ─── Validate environment variables before anything else ──────────────────────
+// Fails fast with a clear error if required vars are missing or malformed.
+enforceEnv();
 
 
 import { ProductService, ServiceError } from "../modules/products/product.service.ts";
@@ -166,6 +171,7 @@ const STATUS_MAP: Record<string, number> = {
   VARIANT_NOT_FOUND:    404,
   CART_NOT_FOUND:       404,
   ORDER_NOT_FOUND:      404,
+  TOO_MANY_REQUESTS:    429,
   CUSTOMER_NOT_FOUND:   404,
   ITEM_NOT_FOUND:       404,
   SESSION_NOT_FOUND:    404,
@@ -207,7 +213,7 @@ app.get("/health", (_req, res) => {
 });
 
 const store = express.Router();
-app.use("/api/store", store);
+app.use("/api/v1/store", store);
 
 
 
@@ -269,6 +275,19 @@ store.post("/auth/login", async (req, res) => {
 store.post("/auth/logout", authenticate, async (req, res) => {
   try {
     const token = req.headers.authorization!.slice(7);
+    
+    if (req.customer) {
+      const orders = OrderService.list({ customer_id: req.customer.id }).data;
+      for (const order of orders) {
+        if (order.status === "pending" || order.payment_status === "awaiting") {
+          const session = PaymentService.getSessionByOrderId(order.id);
+          if (session && session.status === "pending") {
+            await PaymentService.cancelSession(session.id, order.id);
+          }
+        }
+      }
+    }
+
     await AuthService.logout(token);
     res.json({ success: true });
   } catch (e) { handleErr(e, res); }
@@ -498,7 +517,7 @@ store.get("/inventory/:variantId", (req, res) => {
 
 const admin = express.Router();
 admin.use(adminOnly);
-app.use("/api/admin", admin);
+app.use("/api/v1/admin", admin);
 
 
 

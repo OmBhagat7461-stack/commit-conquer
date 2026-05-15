@@ -1,5 +1,3 @@
-
-
 import { type Product, type PaginatedResponse } from "../../core/types";
 import { paginate, stripEmpty } from "../../core/utils";
 import { eventBus, EVENT } from "../../core/event-bus";
@@ -71,7 +69,7 @@ export interface CreateProductInput {
   variants: Array<{
     title: string;
     sku: string;
-    price: number;           // cents
+    price: number; // cents
     inventory_quantity: number;
     options: Record<string, string>;
   }>;
@@ -87,12 +85,7 @@ export interface UpdateProductInput {
   status?: "published" | "draft" | "archived";
 }
 
-
-
 export const ProductService = {
-
-  
-
   list(input: ListProductsInput = {}): PaginatedResponse<Product> {
     const key    = _listKey(input);
     const cached = listCache.get(key);
@@ -112,17 +105,14 @@ export const ProductService = {
 
     let products = ProductModel.findAll();
 
-    
     if (status !== "all") {
       products = products.filter((p) => p.status === status);
     }
 
-    
     if (category && category !== "all") {
       products = products.filter((p) => p.category === category);
     }
 
-    
     if (search && search.trim()) {
       const q = search.trim().toLowerCase();
       products = products.filter(
@@ -134,16 +124,14 @@ export const ProductService = {
       );
     }
 
-
     products = _sort(products, sort);
 
 
     const result = paginate(products, offset, limit);
     listCache.set(key, result);
     return result;
+    return paginate(products, offset, limit);
   },
-
-  
 
   getById(id: string): Product {
     const cached = productCache.get(id);
@@ -156,9 +144,10 @@ export const ProductService = {
     if (!product) throw new ServiceError("PRODUCT_NOT_FOUND", `Product ${id} not found`);
 
     productCache.set(id, product);
+    if (!product)
+      throw new ServiceError("PRODUCT_NOT_FOUND", `Product ${id} not found`);
     return product;
   },
-
 
   getByHandle(handle: string): Product {
     const cacheKey = `handle:${handle}`;
@@ -170,33 +159,34 @@ export const ProductService = {
 
     const product = ProductModel.findByHandle(handle);
     if (!product) {
-      throw new ServiceError("PRODUCT_NOT_FOUND", `Product with handle "${handle}" not found`);
+      throw new ServiceError(
+        "PRODUCT_NOT_FOUND",
+        `Product with handle "${handle}" not found`,
+      );
     }
 
     productCache.set(cacheKey, product);
     return product;
   },
 
-  
-
   async create(input: CreateProductInput): Promise<Product> {
     _validateCreate(input);
 
     const product = ProductModel.create({
-      title:       input.title,
+      title: input.title,
       description: input.description ?? "",
-      thumbnail:   input.thumbnail ?? "",
-      images:      input.images ?? [],
-      status:      input.status ?? "draft",
-      category:    input.category ?? "",
-      tags:        input.tags ?? [],
-      variants:    input.variants.map((v) => ({
-        id:                 `var_${Math.random().toString(36).slice(2, 9)}`,
-        title:              v.title,
-        sku:                v.sku,
-        price:              v.price,
+      thumbnail: input.thumbnail ?? "",
+      images: input.images ?? [],
+      status: input.status ?? "draft",
+      category: input.category ?? "",
+      tags: input.tags ?? [],
+      variants: input.variants.map((v) => ({
+        id: `var_${Math.random().toString(36).slice(2, 9)}`,
+        title: v.title,
+        sku: v.sku,
+        price: v.price,
         inventory_quantity: v.inventory_quantity,
-        options:            v.options,
+        options: v.options,
       })),
     });
 
@@ -205,19 +195,18 @@ export const ProductService = {
 
     await eventBus.emit(EVENT.PRODUCT_CREATED, {
       product_id: product.id,
-      title:      product.title,
+      title: product.title,
     });
 
     return product;
   },
 
-  
-
   async update(id: string, input: UpdateProductInput): Promise<Product> {
-    
     ProductService.getById(id);
 
-    const changes = stripEmpty(input as Record<string, unknown>) as Partial<Product>;
+    const changes = stripEmpty(
+      input as Record<string, unknown>,
+    ) as Partial<Product>;
     const updated = ProductModel.update(id, changes);
 
     if (!updated) {
@@ -231,19 +220,18 @@ export const ProductService = {
 
     await eventBus.emit(EVENT.PRODUCT_UPDATED, {
       product_id: id,
-      changes:    changes as Record<string, unknown>,
+      changes: changes as Record<string, unknown>,
     });
-
     return updated;
   },
 
-  
-
   async delete(id: string): Promise<{ deleted: string }> {
     const product = ProductService.getById(id);   // throws if not found
+    ProductService.getById(id);
 
     const ok = ProductModel.delete(id);
-    if (!ok) throw new ServiceError("DELETE_FAILED", `Failed to delete product ${id}`);
+    if (!ok)
+      throw new ServiceError("DELETE_FAILED", `Failed to delete product ${id}`);
 
     // Evict the specific product entries + all list / category pages
     productCache.delete(id);
@@ -255,10 +243,11 @@ export const ProductService = {
     return { deleted: id };
   },
 
-
-  async bulkDelete(ids: string[]): Promise<{ deleted: string[]; failed: string[] }> {
+  async bulkDelete(
+    ids: string[],
+  ): Promise<{ deleted: string[]; failed: string[] }> {
     const deleted: string[] = [];
-    const failed: string[]  = [];
+    const failed: string[] = [];
 
     for (const id of ids) {
       try {
@@ -272,7 +261,6 @@ export const ProductService = {
     return { deleted, failed };
   },
 
-
   async publish(id: string): Promise<Product> {
     const updated = await ProductService.update(id, { status: "published" });
 
@@ -285,13 +273,16 @@ export const ProductService = {
     return ProductService.update(id, { status: "draft" });
   },
 
-
   async adjustInventory(
     productId: string,
     variantId: string,
     delta: number,
   ): Promise<void> {
-    const variant = ProductModel.updateVariantInventory(productId, variantId, delta);
+    const variant = ProductModel.updateVariantInventory(
+      productId,
+      variantId,
+      delta,
+    );
 
     if (!variant) {
       throw new ServiceError(
@@ -310,29 +301,26 @@ export const ProductService = {
 
     await eventBus.emit(EVENT.INVENTORY_UPDATED, {
       variant_id: variantId,
-      quantity:   qty,
+      quantity: qty,
     });
 
-    // Emit low-stock warning at threshold of 5
     if (qty > 0 && qty <= 5) {
       await eventBus.emit(EVENT.INVENTORY_LOW, {
         variant_id: variantId,
-        quantity:   qty,
-        threshold:  5,
+        quantity: qty,
+        threshold: 5,
       });
     }
 
+    // Emit out-of-stock
     if (qty === 0) {
       await eventBus.emit(EVENT.INVENTORY_OUT, { variant_id: variantId });
     }
   },
 
-
   stats() {
     return ProductModel.stats();
   },
-
-  
 
   categories(): string[] {
     const cached = categoryCache.get("all");
@@ -360,7 +348,6 @@ export const ProductService = {
   },
 };
 
-
 export class ServiceError extends Error {
   constructor(
     public readonly code: string,
@@ -371,13 +358,16 @@ export class ServiceError extends Error {
   }
 }
 
-
-
-function _sort(products: Product[], sort: ListProductsInput["sort"]): Product[] {
+function _sort(
+  products: Product[],
+  sort: ListProductsInput["sort"],
+): Product[] {
   return [...products].sort((a, b) => {
     switch (sort) {
       case "oldest":
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        return (
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
 
       case "price_asc": {
         const aMin = Math.min(...a.variants.map((v) => v.price));
@@ -396,7 +386,9 @@ function _sort(products: Product[], sort: ListProductsInput["sort"]): Product[] 
 
       case "newest":
       default:
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        return (
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
     }
   });
 }
@@ -406,14 +398,20 @@ function _validateCreate(input: CreateProductInput): void {
     throw new ServiceError("VALIDATION_ERROR", "Product title is required");
   }
   if (!input.variants || input.variants.length === 0) {
-    throw new ServiceError("VALIDATION_ERROR", "At least one variant is required");
+    throw new ServiceError(
+      "VALIDATION_ERROR",
+      "At least one variant is required",
+    );
   }
   for (const v of input.variants) {
     if (!v.sku?.trim()) {
       throw new ServiceError("VALIDATION_ERROR", `Variant SKU is required`);
     }
     if (typeof v.price !== "number" || v.price < 0) {
-      throw new ServiceError("VALIDATION_ERROR", `Variant price must be a non-negative number`);
+      throw new ServiceError(
+        "VALIDATION_ERROR",
+        `Variant price must be a non-negative number`,
+      );
     }
   }
 }
