@@ -1,66 +1,31 @@
 
 
-import { createContext, useContext, useReducer } from "react";
+import { createContext, useContext, useState, useEffect, useMemo } from "react";
 import { Outlet, Link, NavLink, useNavigate } from "react-router-dom";
-
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 
 const CartStateCtx    = createContext(null);
 const CartDispatchCtx = createContext(null);
 
-function cartReducer(state, action) {
-  switch (action.type) {
-    case "ADD_ITEM": {
-      const key = (i) => `${i.id}__${i.variantId ?? "default"}`;
-      const exists = state.items.find((i) => key(i) === key(action.payload));
-      if (exists) {
-        return {
-          ...state,
-          items: state.items.map((i) =>
-            key(i) === key(action.payload)
-              ? { ...i, quantity: i.quantity + (action.payload.quantity ?? 1) }
-              : i
-          ),
-        };
-      }
-      return {
-        ...state,
-        items: [...state.items, { ...action.payload, quantity: action.payload.quantity ?? 1 }],
-      };
-    }
-    case "REMOVE_ITEM": {
-      const key = `${action.payload.id}__${action.payload.variantId ?? "default"}`;
-      return { ...state, items: state.items.filter((i) => `${i.id}__${i.variantId ?? "default"}` !== key) };
-    }
-    case "UPDATE_QTY": {
-      const key = `${action.payload.id}__${action.payload.variantId ?? "default"}`;
-      if (action.payload.quantity <= 0)
-        return { ...state, items: state.items.filter((i) => `${i.id}__${i.variantId ?? "default"}` !== key) };
-      return {
-        ...state,
-        items: state.items.map((i) =>
-          `${i.id}__${i.variantId ?? "default"}` === key ? { ...i, quantity: action.payload.quantity } : i
-        ),
-      };
-    }
-    case "CLEAR":
-      return { ...state, items: [] };
-    case "TOGGLE_CART":
-      return { ...state, isOpen: action.payload ?? !state.isOpen };
-    default:
-      return state;
-  }
-}
+const API = "http://localhost:4000/api/store";
 
-function CartProvider({ children }) {
+export function CartProvider({ children }) {
   const [state, dispatch] = useReducer(cartReducer, { items: [], isOpen: false });
   const derived = {
     ...state,
     count: state.items.reduce((n, i) => n + i.quantity, 0),
     total: state.items.reduce((s, i) => s + i.price * i.quantity, 0),
   };
+function CartProvider({ children }) {
+  const [state, dispatch] = useReducer(cartReducer, { items: [], isOpen: false });
+  const derived = {
+    ...state,
+    count: state.items.reduce((n, i) => n + (Number(i.quantity) || 0), 0),
+    total: state.items.reduce((s, i) => s + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0),
+  };
   return (
-    <CartStateCtx.Provider value={derived}>
+    <CartStateCtx.Provider value={state}>
       <CartDispatchCtx.Provider value={dispatch}>
         {children}
       </CartDispatchCtx.Provider>
@@ -140,15 +105,13 @@ function Footer() {
 
 export default function Layout() {
   return (
-    <CartProvider>
-      <div style={s.root}>
-        <Header />
-        <main style={s.main}>
-          <Outlet />   {/* React Router renders child page here */}
-        </main>
-        <Footer />
-      </div>
-    </CartProvider>
+    <div style={s.root}>
+      <Header />
+      <main style={s.main}>
+        <Outlet />   {/* React Router renders child page here */}
+      </main>
+      <Footer />
+    </div>
   );
 }
 

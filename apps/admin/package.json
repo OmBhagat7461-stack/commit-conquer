@@ -20,6 +20,7 @@
     "dev": "vite",
     "build": "vite build",
     "server": "ts-node ../packages/server/index.ts",
-    "server:dev": "nodemon --exec ts-node ../packages/server/index.ts"
+    "server:dev": "nodemon --exec ts-node ../packages/server/index.ts",
+    "db:backup": "bash ../../scripts/backup-db.sh"
   }
 }

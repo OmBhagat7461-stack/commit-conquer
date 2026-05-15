@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { Link, useNavigate } from "react-router-dom";
 import { useCartState, useCartDispatch } from "../Layout";
 import CartDrawer from "../CartDrawer";
 
@@ -13,7 +14,7 @@ interface Product {
   category: string;
   status: "published" | "draft";
   thumbnail: string;
-  price: number;         
+  price: number;
   originalPrice?: number;
   inventory: number;
   tags: string[];
@@ -96,30 +97,6 @@ async function fetchProducts({
 
 
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;500;600;700;800&display=swap');
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  :root {
-    --bg: #0c0c0e; --surface: #141417; --surface2: #1c1c21;
-    --border: #2a2a31; --border-hover: #404050;
-    --text: #e8e8f0; --text-muted: #6b6b80; --text-dim: #9999aa;
-    --accent: #7c6aff; --accent-dim: rgba(124,106,255,0.15); --accent-glow: rgba(124,106,255,0.3);
-    --green: #3ddc97; --green-dim: rgba(61,220,151,0.12);
-    --amber: #f5a623; --amber-dim: rgba(245,166,35,0.12);
-    --red: #ff5c5c; --red-dim: rgba(255,92,92,0.12);
-    --radius: 6px; --radius-lg: 10px; --radius-xl: 16px;
-    --mono: 'DM Mono', monospace; --sans: 'Syne', sans-serif;
-    --transition: 160ms cubic-bezier(0.4,0,0.2,1);
-  }
-
-  html { scroll-behavior: smooth; }
-  body { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; }
-
-  ::-webkit-scrollbar { width: 4px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
-
   /* ── Navbar ── */
   .nav {
     position: sticky; top: 0; z-index: 100;
@@ -432,6 +409,7 @@ function ProductCard({
   listView: boolean;
   onAddToCart: (p: Product) => void;
 }) {
+  const navigate = useNavigate();
   const [added, setAdded] = useState(false);
   const [localInv, setLocalInv] = useState(product.inventory);
 
@@ -451,14 +429,14 @@ function ProductCard({
     <div
       className={`product-card${listView ? " list-card" : ""}`}
       onClick={() => {
-        
+
         window.location.href = `/products/${product.handle}`;
       }}
     >
       <div className="card-img-wrap">
         <img src={product.thumbnail} alt={product.title} className="card-img" loading="lazy" />
 
-        
+
         {product.tags.length > 0 && (
           <div className="card-badges">
             {product.tags.map((tag) => (
@@ -467,7 +445,7 @@ function ProductCard({
           </div>
         )}
 
-        
+
         {!listView && (
           <div className="card-quick-add">
             <button
@@ -482,7 +460,7 @@ function ProductCard({
               ) : (
                 <>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>
+                    <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" /><line x1="3" y1="6" x2="21" y2="6" /><path d="M16 10a4 4 0 0 1-8 0" />
                   </svg>
                   Add to Cart
                 </>
@@ -548,7 +526,7 @@ function SkeletonCard() {
 
 export default function StorefrontPage() {
   const { itemCount } = useCartState();
-  
+
   const { addItem } = useCartDispatch() as any;
 
   const [cartOpen, setCartOpen] = useState(false);
@@ -563,7 +541,7 @@ export default function StorefrontPage() {
 
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  
+
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 350);
     return () => clearTimeout(t);
@@ -594,16 +572,26 @@ export default function StorefrontPage() {
   const total = data?.pages[0]?.total ?? 0;
 
   const handleAddToCart = useCallback((product: Product) => {
-    addItem({
+    dispatch({
+      type: "ADD_ITEM",
+      payload: {
+        id: product.id,
+        title: product.title,
+        price: product.price,
+        thumbnail: product.thumbnail,
+        quantity: 1,
+      },
+    dispatch.addItem({
       id: product.id,
+      variantId: product.variantId,
       title: product.title,
-      price: product.price,
+      price: Math.round(product.price * 100), // Convert dollars to cents for the backend
       thumbnail: product.thumbnail,
       quantity: 1,
     });
     setToast(`${product.title} added to cart`);
     setTimeout(() => setToast(null), 2200);
-  }, [addItem]);
+  }, [dispatch]);
 
   const toggleTag = (tag: string) => {
     setActiveTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]);
@@ -626,21 +614,21 @@ export default function StorefrontPage() {
     <>
       <style>{css}</style>
 
-      
+
       <nav className="nav">
-        <a href="/" className="nav-logo">
+        <Link to="/" className="nav-logo">
           <span className="nav-logo-dot" />
           commit&amp;conquer
-        </a>
+        </Link>
         <div className="nav-links">
-          <a href="/" className="nav-link active">Shop</a>
-          <a href="/collections" className="nav-link">Collections</a>
-          <a href="/about" className="nav-link">About</a>
+          <Link to="/" className="nav-link active">Shop</Link>
+          <Link to="/collections" className="nav-link">Collections</Link>
+          <Link to="/about" className="nav-link">About</Link>
         </div>
         <div className="nav-actions">
           <button className="cart-btn" onClick={() => setCartOpen(true)}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>
+              <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" /><line x1="3" y1="6" x2="21" y2="6" /><path d="M16 10a4 4 0 0 1-8 0" />
             </svg>
             Cart
             {itemCount > 0 && <span className="cart-badge">{itemCount > 9 ? "9+" : itemCount}</span>}
@@ -648,10 +636,10 @@ export default function StorefrontPage() {
         </div>
       </nav>
 
-      
+
       <section className="hero">
         <div className="hero-eyebrow">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8" /></svg>
           New Season — Drop 01
         </div>
         <h1 className="hero-title">Minimal. Functional.<br />Uncompromising.</h1>
@@ -662,14 +650,14 @@ export default function StorefrontPage() {
           <a href="#products" className="btn-cta-primary">
             Shop the Collection
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M5 12h14M12 5l7 7-7 7"/>
+              <path d="M5 12h14M12 5l7 7-7 7" />
             </svg>
           </a>
-          <a href="/about" className="btn-cta-ghost">Our Story</a>
+          <Link to="/about" className="btn-cta-ghost">Our Story</Link>
         </div>
       </section>
 
-      
+
       <div className="cat-strip">
         {CATEGORIES.map((c) => (
           <button
@@ -682,9 +670,9 @@ export default function StorefrontPage() {
         ))}
       </div>
 
-      
+
       <div className="shop-layout" id="products">
-        
+
         <aside className="sidebar">
           <div className="sidebar-section">
             <div className="sidebar-label">Sort by</div>
@@ -739,14 +727,14 @@ export default function StorefrontPage() {
           )}
         </aside>
 
-        
+
         <div className="grid-col">
-          
+
           <div className="toolbar">
             <div className="search-wrap">
               <span className="search-icon">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                  <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
                 </svg>
               </span>
               <input
@@ -772,7 +760,7 @@ export default function StorefrontPage() {
               {isFetching && !isLoading ? "…" : `${total} products`}
             </span>
 
-            
+
             <div className="view-btns">
               {(["4", "3", "list"] as const).map((v) => (
                 <button
@@ -783,13 +771,13 @@ export default function StorefrontPage() {
                 >
                   {v === "list" ? (
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
-                      <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+                      <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
+                      <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
                     </svg>
                   ) : (
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-                      <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+                      <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" />
+                      <rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" />
                     </svg>
                   )}
                 </button>
@@ -797,19 +785,19 @@ export default function StorefrontPage() {
             </div>
           </div>
 
-          
+
           <div className={`product-grid grid-${viewMode}`}>
             {isLoading
               ? Array.from({ length: 12 }, (_, i) => <SkeletonCard key={i} />)
               : allProducts.length === 0
-              ? (
-                <div className="empty-state" style={{ gridColumn: "1/-1" }}>
-                  <div className="empty-icon">◈</div>
-                  <div className="empty-title">No products found</div>
-                  <div className="empty-sub">Try adjusting your filters or search terms</div>
-                </div>
-              )
-              : allProducts
+                ? (
+                  <div className="empty-state" style={{ gridColumn: "1/-1" }}>
+                    <div className="empty-icon">◈</div>
+                    <div className="empty-title">No products found</div>
+                    <div className="empty-sub">Try adjusting your filters or search terms</div>
+                  </div>
+                )
+                : allProducts
                   .filter((p) => p.price <= maxPrice)
                   .map((product) => (
                     <ProductCard
@@ -833,14 +821,14 @@ export default function StorefrontPage() {
         </div>
       </div>
 
-      
+
       {cartOpen && <CartDrawer />}
 
-      
+
       {toast && (
         <div className="toast">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <polyline points="20 6 9 17 4 12"/>
+            <polyline points="20 6 9 17 4 12" />
           </svg>
           {toast}
         </div>
