@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LeaderboardPage from "./LeaderboardPage";
+import OnboardingChecklist from "../OnboardingChecklist";
 
 
 const ADMIN_HDR = { "Content-Type": "application/json", "X-Admin-Secret": "admin_dev_secret" };
@@ -111,7 +112,7 @@ function useToast() {
 
 
 
-function DashboardPage({ setPage }) {
+function DashboardPage({ setPage, currentPage }) {
   const stats = {
     products: { total: 24, published: 20, draft: 4 },
     orders: { total: 47, pending: 8, fulfilled: 35, cancelled: 4, revenue: 428900 },
@@ -128,6 +129,7 @@ function DashboardPage({ setPage }) {
         <h1 style={s.pageTitle}>Dashboard</h1>
         <p style={{ color: "#888", fontSize: 14 }}>Welcome back. Here's what's happening.</p>
       </div>
+      <OnboardingChecklist setPage={setPage} currentPage={currentPage} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 16, marginBottom: 48 }}>
         {cards.map((c) => (
           <button key={c.label} onClick={() => setPage(c.page)} style={{ background: "#141417", border: "1px solid #2a2a31",
@@ -631,7 +633,7 @@ export default function UnifiedDashboard() {
 
         {/* ── Main content ── */}
         <main style={{ flex: 1, overflowY: "auto", padding: "36px 40px" }}>
-          {page === "dashboard"   && <DashboardPage setPage={setPage} />}
+          {page === "dashboard"   && <DashboardPage setPage={setPage} currentPage={page} />}
           {page === "products"    && <ProductsPage />}
           {page === "orders"      && <OrdersPage />}
           {page === "storefront"  && <StorefrontPage />}
