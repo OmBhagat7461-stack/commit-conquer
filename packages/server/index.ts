@@ -298,6 +298,13 @@ store.post("/auth/google", async (req, res) => {
   } catch (e) { handleErr(e, res); }
 });
 
+store.post("/auth/refresh", async (req, res) => {
+  try {
+    const result = await AuthService.refreshSession(req.body.refresh_token);
+    res.json(result);
+  } catch (e) { handleErr(e, res); }
+});
+
 
 store.post("/carts", softAuthenticate, async (req, res) => {
   try {

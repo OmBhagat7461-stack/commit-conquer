@@ -34,6 +34,29 @@ const customersByEmail = new Map<string, CustomerRecord>();
 const customersById = new Map<string, CustomerRecord>();
 const sessions = new Map<string, AuthSession>();
 
+// ─── Refresh Token Rotation ───────────────────────────────────────────────────
+// Maps refresh_token → session's access token (to look up the session).
+const refreshIndex = new Map<string, string>();
+
+// Stores refresh tokens that have already been consumed (rotated).
+// If a consumed token is presented again, it signals a replay attack and the
+// entire token family is revoked.
+const usedRefreshTokens = new Map<string, { family: string; usedAt: number }>();
+
+// TTLs
+const ACCESS_TOKEN_TTL_MS  = 1000 * 60 * 15;        // 15 minutes
+const REFRESH_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+
+// Cleanup consumed tokens older than 8 days (no replay possible after refresh expiry)
+const USED_TOKEN_RETENTION_MS = 1000 * 60 * 60 * 24 * 8;
+const _usedTokenCleanupTimer = setInterval(() => {
+  const cutoff = Date.now() - USED_TOKEN_RETENTION_MS;
+  for (const [tok, meta] of usedRefreshTokens) {
+    if (meta.usedAt < cutoff) usedRefreshTokens.delete(tok);
+  }
+}, 60 * 60 * 1000); // every hour
+if (typeof _usedTokenCleanupTimer.unref === "function") _usedTokenCleanupTimer.unref();
+
 // Rate-limiting: track last password-reset request time per email
 const RESET_COOLDOWN_MS = 60_000; // 60 seconds between requests
 const resetCooldowns = new Map<string, number>();
@@ -61,7 +84,7 @@ _seed();
 export const AuthService = {
   async register(
     input: RegisterInput,
-  ): Promise<{ customer: Customer; token: string }> {
+  ): Promise<{ customer: Customer; token: string; refresh_token: string }> {
     _validateRegister(input);
 
     const emailKey = input.email.toLowerCase().trim();
@@ -93,19 +116,19 @@ export const AuthService = {
     customersByEmail.set(emailKey, record);
     customersById.set(customer.id, record);
 
-    const token = _issueToken(customer.id);
+    const session = _issueToken(customer.id);
 
     await eventBus.emit(EVENT.CUSTOMER_CREATED, {
       customer_id: customer.id,
       email: customer.email,
     });
 
-    return { customer, token };
+    return { customer, token: session.token, refresh_token: session.refresh_token };
   },
 
   async login(
     input: LoginInput,
-  ): Promise<{ customer: Customer; token: string }> {
+  ): Promise<{ customer: Customer; token: string; refresh_token: string }> {
     if (!input.email || !input.password) {
       throw new ServiceError(
         "VALIDATION_ERROR",
@@ -125,19 +148,26 @@ export const AuthService = {
       );
     }
 
-    const token = _issueToken(record.customer.id);
+    const session = _issueToken(record.customer.id);
 
     await eventBus.emit(EVENT.CUSTOMER_LOGGED_IN, {
       customer_id: record.customer.id,
     });
 
-    return { customer: record.customer, token };
+    return { customer: record.customer, token: session.token, refresh_token: session.refresh_token };
   },
 
   async logout(token: string): Promise<void> {
     const session = sessions.get(token);
     if (!session) return; // already gone — idempotent
 
+    // Clean up refresh index
+    refreshIndex.delete(session.refresh_token);
+    // Mark the refresh token as used so a later replay is caught
+    usedRefreshTokens.set(session.refresh_token, {
+      family: session.token_family,
+      usedAt: Date.now(),
+    });
     sessions.delete(token);
 
     await eventBus.emit(EVENT.CUSTOMER_LOGGED_OUT, {
@@ -245,6 +275,7 @@ export const AuthService = {
 
     for (const [token, session] of sessions.entries()) {
       if (session.customer_id === customerId) {
+        refreshIndex.delete(session.refresh_token);
         sessions.delete(token);
       }
     }
@@ -337,9 +368,10 @@ export const AuthService = {
     customersById.set(found.customer.id, found);
     customersByEmail.set(found.customer.email, found);
 
-    // Invalidate all sessions
+    // Invalidate all sessions (including refresh tokens)
     for (const [token, session] of sessions.entries()) {
       if (session.customer_id === found.customer.id) {
+        refreshIndex.delete(session.refresh_token);
         sessions.delete(token);
       }
     }
@@ -347,7 +379,7 @@ export const AuthService = {
 
   async googleLogin(
     googleToken: string,
-  ): Promise<{ customer: Customer; token: string }> {
+  ): Promise<{ customer: Customer; token: string; refresh_token: string }> {
     const payload = _decodeGoogleToken(googleToken);
 
     const email = payload.email;
@@ -378,8 +410,73 @@ export const AuthService = {
       });
     }
 
-    const token = _issueToken(record.customer.id);
-    return { customer: record.customer, token };
+    const session = _issueToken(record.customer.id);
+    return { customer: record.customer, token: session.token, refresh_token: session.refresh_token };
+  },
+
+  /**
+   * Rotate a refresh token: invalidate the old one and issue a new
+   * access + refresh pair in the same token family.
+   *
+   * If the refresh token was already consumed (replay attack), revoke the
+   * ENTIRE family — every session that descended from the original login.
+   */
+  async refreshSession(
+    refreshToken: string,
+  ): Promise<{ customer: Customer; token: string; refresh_token: string }> {
+    // ── Replay detection ──────────────────────────────────────────────────
+    const usedMeta = usedRefreshTokens.get(refreshToken);
+    if (usedMeta) {
+      // This token was already rotated → potential theft.  Kill the family.
+      _revokeFamily(usedMeta.family);
+      logger.warn("Refresh token replay detected — family revoked", {
+        family: usedMeta.family,
+      });
+      throw new ServiceError(
+        "INVALID_TOKEN",
+        "Refresh token has already been used — all sessions revoked for security",
+      );
+    }
+
+    // ── Normal rotation ───────────────────────────────────────────────────
+    const accessToken = refreshIndex.get(refreshToken);
+    if (!accessToken) {
+      throw new ServiceError("INVALID_TOKEN", "Refresh token not found");
+    }
+
+    const oldSession = sessions.get(accessToken);
+    if (!oldSession) {
+      throw new ServiceError("INVALID_TOKEN", "Session not found");
+    }
+
+    if (new Date(oldSession.refresh_expires_at) < new Date()) {
+      // Expired — clean up and reject
+      sessions.delete(accessToken);
+      refreshIndex.delete(refreshToken);
+      throw new ServiceError("TOKEN_EXPIRED", "Refresh token expired — please log in again");
+    }
+
+    const customerId = oldSession.customer_id;
+    const family     = oldSession.token_family;
+
+    // Mark the old refresh token as consumed
+    usedRefreshTokens.set(refreshToken, { family, usedAt: Date.now() });
+    refreshIndex.delete(refreshToken);
+    sessions.delete(accessToken);
+
+    // Issue new pair in the same family
+    const newSession = _issueToken(customerId, family);
+
+    const record = customersById.get(customerId);
+    if (!record) {
+      throw new ServiceError("CUSTOMER_NOT_FOUND", "Customer account not found");
+    }
+
+    return {
+      customer: record.customer,
+      token: newSession.token,
+      refresh_token: newSession.refresh_token,
+    };
   },
 
   activeSessions(customerId: string): AuthSession[] {
@@ -390,20 +487,33 @@ export const AuthService = {
   },
 };
 
-function _issueToken(customerId: string): string {
-  const token = `tok_${customerId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const expires_at = new Date(
-    Date.now() + 1000 * 60 * 60 * 24 * 7,
-  ).toISOString();
+function _issueToken(customerId: string, family?: string): AuthSession {
+  const token         = `tok_${customerId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const refresh_token = `rtk_${customerId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const token_family  = family ?? `fam_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
   const session: AuthSession = {
     customer_id: customerId,
     token,
-    expires_at,
+    refresh_token,
+    token_family,
+    expires_at:         new Date(Date.now() + ACCESS_TOKEN_TTL_MS).toISOString(),
+    refresh_expires_at: new Date(Date.now() + REFRESH_TOKEN_TTL_MS).toISOString(),
   };
 
   sessions.set(token, session);
-  return token;
+  refreshIndex.set(refresh_token, token);
+  return session;
+}
+
+/** Revoke every session that belongs to a given token family. */
+function _revokeFamily(family: string): void {
+  for (const [token, session] of sessions) {
+    if (session.token_family === family) {
+      refreshIndex.delete(session.refresh_token);
+      sessions.delete(token);
+    }
+  }
 }
 
 function _hashPassword(password: string): string {

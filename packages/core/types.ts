@@ -121,7 +121,11 @@ export interface Customer {
 export interface AuthSession {
   customer_id: string;
   token: string;
+  refresh_token: string;
+  /** Token family ID — all tokens descended from the same login share this. */
+  token_family: string;
   expires_at: string;
+  refresh_expires_at: string;
 }
 
 // ─── Payment ─────────────────────────────────────────────────────────────────
