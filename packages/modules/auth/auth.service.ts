@@ -33,6 +33,10 @@ const customersByEmail = new Map<string, CustomerRecord>();
 const customersById = new Map<string, CustomerRecord>();
 const sessions = new Map<string, AuthSession>();
 
+// Rate-limiting: track last password-reset request time per email
+const RESET_COOLDOWN_MS = 60_000; // 60 seconds between requests
+const resetCooldowns = new Map<string, number>();
+
 function _seed() {
   const id = "cust_demo_001";
   const record: CustomerRecord = {
@@ -247,6 +251,20 @@ export const AuthService = {
 
   async requestPasswordReset(email: string): Promise<{ reset_token: string }> {
     const emailKey = email.toLowerCase().trim();
+
+    // ── Rate-limit: enforce cooldown per email ────────────────────────────
+    const lastRequest = resetCooldowns.get(emailKey);
+    if (lastRequest && Date.now() - lastRequest < RESET_COOLDOWN_MS) {
+      const waitSeconds = Math.ceil(
+        (RESET_COOLDOWN_MS - (Date.now() - lastRequest)) / 1000,
+      );
+      throw new ServiceError(
+        "RATE_LIMITED",
+        `Too many reset requests. Please wait ${waitSeconds} seconds before trying again.`,
+      );
+    }
+    resetCooldowns.set(emailKey, Date.now());
+
     const record = customersByEmail.get(emailKey);
 
     await sleep(200);

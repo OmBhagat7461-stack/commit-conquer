@@ -118,6 +118,7 @@ const STATUS_MAP: Record<string, number> = {
   INSUFFICIENT_STOCK:   409,
   EMAIL_EXISTS:         409,
   VALIDATION_ERROR:     422,
+  RATE_LIMITED:         429,
   WEAK_PASSWORD:        422,
   EMPTY_CART:           422,
   MISSING_EMAIL:        422,
