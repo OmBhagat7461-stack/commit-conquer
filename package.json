@@ -10,12 +10,19 @@
 	"scripts": {
 		"dev": "echo \"Run individual app dev scripts from their directories\"",
 		"start:server": "ts-node packages/server/index.ts",
+		"start:gateway": "SERVICE_MODE=gateway ts-node packages/server/gateway.ts",
+		"start:products": "ts-node packages/server/services/product-service.ts",
+		"start:auth": "ts-node packages/server/services/auth-service.ts",
+		"start:cart": "ts-node packages/server/services/cart-service.ts",
+		"start:orders": "ts-node packages/server/services/order-service.ts",
 		"lint": "eslint packages/server/ apps/storefront/src/ --ext .ts,.tsx",
 		"lint:fix": "eslint packages/server/ apps/storefront/src/ --ext .ts,.tsx --fix",
 		"docker:up": "docker compose -f infra/docker-compose.yml up --build",
 		"docker:down": "docker compose -f infra/docker-compose.yml down",
 		"docker:reset": "docker compose -f infra/docker-compose.yml down -v && docker compose -f infra/docker-compose.yml up --build",
-		"docker:logs": "docker compose -f infra/docker-compose.yml logs -f"
+		"docker:logs": "docker compose -f infra/docker-compose.yml logs -f",
+		"docker:services": "docker compose -f infra/docker-compose.yml -f infra/docker-compose.services.yml up --build",
+		"docker:services:down": "docker compose -f infra/docker-compose.yml -f infra/docker-compose.services.yml down"
 	},
 	"dependencies": {
 		"cors": "^2.8.6",

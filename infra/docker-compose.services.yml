@@ -1,0 +1,156 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# commit-conquer — Scaled Microservices Compose
+#
+# Use this when you need to scale individual bottlenecks independently.
+#
+# Usage:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.services.yml up
+#
+# Scale a specific bottleneck:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.services.yml \
+#     up --scale product-svc=3
+#
+# Architecture:
+#   Client → Gateway (:4000) → product-svc  (:4001)
+#                              → auth-svc     (:4002)
+#                              → cart-svc     (:4003)
+#                              → order-svc    (:4004)
+#                              → PostgreSQL   (:5432)
+#                              → Redis        (:6379)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── API Gateway ──────────────────────────────────────────────────────────
+  # Thin routing layer — proxies to individual services
+  gateway:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: prod
+    container_name: cc-gateway
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      SERVICE_ENTRY: packages/server/gateway.ts
+      SERVICE_MODE: gateway
+      GATEWAY_PORT: "4000"
+      PRODUCT_SERVICE_URL: http://product-svc:4001
+      AUTH_SERVICE_URL: http://auth-svc:4002
+      CART_SERVICE_URL: http://cart-svc:4003
+      ORDER_SERVICE_URL: http://order-svc:4004
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+    depends_on:
+      - product-svc
+      - auth-svc
+      - cart-svc
+      - order-svc
+
+  # ── Product Service ──────────────────────────────────────────────────────
+  # Highest read volume — scale this first
+  product-svc:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: prod
+    restart: unless-stopped
+    environment:
+      SERVICE_ENTRY: packages/server/services/product-service.ts
+      PRODUCT_SERVICE_PORT: "4001"
+      DATABASE_URL: postgres://commit_conquer:localdev@postgres:5432/commit_conquer_dev
+      REDIS_URL: redis://redis:6379
+    expose:
+      - "4001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: ${PRODUCT_REPLICAS:-1}
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  # ── Auth Service ─────────────────────────────────────────────────────────
+  auth-svc:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: prod
+    restart: unless-stopped
+    environment:
+      SERVICE_ENTRY: packages/server/services/auth-service.ts
+      AUTH_SERVICE_PORT: "4002"
+      DATABASE_URL: postgres://commit_conquer:localdev@postgres:5432/commit_conquer_dev
+      REDIS_URL: redis://redis:6379
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:4000/auth/google/callback}
+    expose:
+      - "4002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: ${AUTH_REPLICAS:-1}
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+
+  # ── Cart Service ─────────────────────────────────────────────────────────
+  cart-svc:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: prod
+    restart: unless-stopped
+    environment:
+      SERVICE_ENTRY: packages/server/services/cart-service.ts
+      CART_SERVICE_PORT: "4003"
+      DATABASE_URL: postgres://commit_conquer:localdev@postgres:5432/commit_conquer_dev
+      REDIS_URL: redis://redis:6379
+    expose:
+      - "4003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: ${CART_REPLICAS:-1}
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+
+  # ── Order Service ────────────────────────────────────────────────────────
+  order-svc:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: prod
+    restart: unless-stopped
+    environment:
+      SERVICE_ENTRY: packages/server/services/order-service.ts
+      ORDER_SERVICE_PORT: "4004"
+      DATABASE_URL: postgres://commit_conquer:localdev@postgres:5432/commit_conquer_dev
+      REDIS_URL: redis://redis:6379
+    expose:
+      - "4004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: ${ORDER_REPLICAS:-1}
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
