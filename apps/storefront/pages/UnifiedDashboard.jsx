@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useQueryClient, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import LeaderboardPage from "./LeaderboardPage";
 
 
 const ADMIN_HDR = { "Content-Type": "application/json", "X-Admin-Secret": "admin_dev_secret" };
@@ -560,10 +561,11 @@ const s = {
 
 
 const NAV = [
-  { id: "dashboard",  label: "Dashboard",  icon: "⬡", section: "admin" },
-  { id: "products",   label: "Products",   icon: "◈", section: "admin" },
-  { id: "orders",     label: "Orders",     icon: "○", section: "admin" },
-  { id: "storefront", label: "Storefront", icon: "⬢", section: "store" },
+  { id: "dashboard",   label: "Dashboard",   icon: "⬡", section: "admin" },
+  { id: "products",    label: "Products",    icon: "◈", section: "admin" },
+  { id: "orders",      label: "Orders",      icon: "○", section: "admin" },
+  { id: "storefront",  label: "Storefront",  icon: "⬢", section: "store" },
+  { id: "leaderboard", label: "Leaderboard", icon: "🏆", section: "store" },
 ];
 
 
@@ -629,10 +631,11 @@ export default function UnifiedDashboard() {
 
         {/* ── Main content ── */}
         <main style={{ flex: 1, overflowY: "auto", padding: "36px 40px" }}>
-          {page === "dashboard"  && <DashboardPage setPage={setPage} />}
-          {page === "products"   && <ProductsPage />}
-          {page === "orders"     && <OrdersPage />}
-          {page === "storefront" && <StorefrontPage />}
+          {page === "dashboard"   && <DashboardPage setPage={setPage} />}
+          {page === "products"    && <ProductsPage />}
+          {page === "orders"      && <OrdersPage />}
+          {page === "storefront"  && <StorefrontPage />}
+          {page === "leaderboard" && <LeaderboardPage />}
         </main>
       </div>
     </QueryClientProvider>
