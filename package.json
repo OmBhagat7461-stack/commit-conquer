@@ -11,7 +11,11 @@
 		"dev": "echo \"Run individual app dev scripts from their directories\"",
 		"start:server": "ts-node packages/server/index.ts",
 		"lint": "eslint packages/server/ apps/storefront/src/ --ext .ts,.tsx",
-		"lint:fix": "eslint packages/server/ apps/storefront/src/ --ext .ts,.tsx --fix"
+		"lint:fix": "eslint packages/server/ apps/storefront/src/ --ext .ts,.tsx --fix",
+		"docker:up": "docker compose -f infra/docker-compose.yml up --build",
+		"docker:down": "docker compose -f infra/docker-compose.yml down",
+		"docker:reset": "docker compose -f infra/docker-compose.yml down -v && docker compose -f infra/docker-compose.yml up --build",
+		"docker:logs": "docker compose -f infra/docker-compose.yml logs -f"
 	},
 	"dependencies": {
 		"cors": "^2.8.6",

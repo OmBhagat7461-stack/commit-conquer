@@ -1,0 +1,116 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# commit-conquer Local Development Stack
+#
+# Usage:
+#   docker compose up          # start all services
+#   docker compose up -d       # start in background
+#   docker compose down        # stop all services
+#   docker compose down -v     # stop + delete volumes (reset DB data)
+#
+# The app is available at:
+#   Frontend:  http://localhost:5173
+#   API:       http://localhost:3000
+#   pgAdmin:   http://localhost:5050  (admin@local.dev / admin)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: cc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: commit_conquer
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB: commit_conquer_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./init-scripts/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U commit_conquer -d commit_conquer_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: cc-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── API Server ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: dev
+    container_name: cc-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      DATABASE_URL: postgres://commit_conquer:localdev@postgres:5432/commit_conquer_dev
+      REDIS_URL: redis://redis:6379
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: http://localhost:3000/auth/google/callback
+    volumes:
+      - ../packages:/app/packages
+      - ../tsconfig.json:/app/tsconfig.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Frontend (Vite dev server) ────────────────────────────────────────────
+  frontend:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.frontend
+      target: dev
+    container_name: cc-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:3000
+    volumes:
+      - ../apps/storefront:/app/apps/storefront
+      - /app/apps/storefront/node_modules
+    depends_on:
+      - api
+
+  # ── pgAdmin (optional, for DB browsing) ──────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: cc-pgadmin
+    restart: unless-stopped
+    profiles: ["tools"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pg_data:
+  redis_data:
