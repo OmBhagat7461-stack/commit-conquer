@@ -211,6 +211,19 @@ export const OrderService = {
 
   async place(input: PlaceOrderInput): Promise<Order> {
     
+    const tempCart = CartService.get(input.cart_id);
+    if (tempCart.discount_code && tempCart.email) {
+      const hasUsed = [...orders.values()].some(
+        (o) => o.email === tempCart.email && o.discount_code === tempCart.discount_code && o.status !== "cancelled"
+      );
+      if (hasUsed) {
+        throw new ServiceError(
+          "DISCOUNT_ALREADY_USED",
+          `Discount code "${tempCart.discount_code}" has already been used by this customer`
+        );
+      }
+    }
+
     const { cart, order_id } = await CartService.complete(input.cart_id);
 
     
@@ -236,6 +249,7 @@ export const OrderService = {
       shipping_total:      cart.shipping_total,
       tax_total:           cart.tax_total,
       discount_amount:     cart.discount_amount,
+      discount_code:       cart.discount_code,
       total:               cart.total,
       shipping_address:    cart.shipping_address!,
       billing_address:     cart.billing_address ?? cart.shipping_address!,
@@ -402,8 +416,12 @@ export const OrderService = {
       );
     }
 
-    if (amount <= 0) {
-      throw new ServiceError("INVALID_AMOUNT", "Refund amount must be greater than zero");
+    if (typeof amount !== "number" || Number.isNaN(amount) || amount <= 0) {
+      throw new ServiceError("INVALID_AMOUNT", "Refund amount must be a valid number greater than zero");
+    }
+
+    if (Number.isNaN(order.total)) {
+      throw new ServiceError("INVALID_ORDER", "Order total is corrupted (NaN)");
     }
 
     if (amount > order.total) {

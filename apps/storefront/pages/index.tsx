@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { Link, useNavigate } from "react-router-dom";
 import { useCartState, useCartDispatch } from "../Layout";
 import CartDrawer from "../CartDrawer";
 
@@ -96,30 +97,6 @@ async function fetchProducts({
 
 
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;500;600;700;800&display=swap');
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  :root {
-    --bg: #0c0c0e; --surface: #141417; --surface2: #1c1c21;
-    --border: #2a2a31; --border-hover: #404050;
-    --text: #e8e8f0; --text-muted: #6b6b80; --text-dim: #9999aa;
-    --accent: #7c6aff; --accent-dim: rgba(124,106,255,0.15); --accent-glow: rgba(124,106,255,0.3);
-    --green: #3ddc97; --green-dim: rgba(61,220,151,0.12);
-    --amber: #f5a623; --amber-dim: rgba(245,166,35,0.12);
-    --red: #ff5c5c; --red-dim: rgba(255,92,92,0.12);
-    --radius: 6px; --radius-lg: 10px; --radius-xl: 16px;
-    --mono: 'DM Mono', monospace; --sans: 'Syne', sans-serif;
-    --transition: 160ms cubic-bezier(0.4,0,0.2,1);
-  }
-
-  html { scroll-behavior: smooth; }
-  body { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; }
-
-  ::-webkit-scrollbar { width: 4px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
-
   /* ── Navbar ── */
   .nav {
     position: sticky; top: 0; z-index: 100;
@@ -432,6 +409,7 @@ function ProductCard({
   listView: boolean;
   onAddToCart: (p: Product) => void;
 }) {
+  const navigate = useNavigate();
   const [added, setAdded] = useState(false);
   const [localInv, setLocalInv] = useState(product.inventory);
 
@@ -450,10 +428,7 @@ function ProductCard({
   return (
     <div
       className={`product-card${listView ? " list-card" : ""}`}
-      onClick={() => {
-        
-        window.location.href = `/products/${product.handle}`;
-      }}
+      onClick={() => navigate(`/products/${product.handle}`)}
     >
       <div className="card-img-wrap">
         <img src={product.thumbnail} alt={product.title} className="card-img" loading="lazy" />
@@ -548,8 +523,10 @@ function SkeletonCard() {
 
 export default function StorefrontPage() {
   const { itemCount } = useCartState();
+  const dispatch = useCartDispatch();
+  const navigate = useNavigate();
   
-  const { addItem } = useCartDispatch() as any;
+  const dispatch = useCartDispatch() as any;
 
   const [cartOpen, setCartOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -594,16 +571,25 @@ export default function StorefrontPage() {
   const total = data?.pages[0]?.total ?? 0;
 
   const handleAddToCart = useCallback((product: Product) => {
-    addItem({
+    dispatch({
+      type: "ADD_ITEM",
+      payload: {
+        id: product.id,
+        title: product.title,
+        price: product.price,
+        thumbnail: product.thumbnail,
+        quantity: 1,
+      },
+    dispatch.addItem({
       id: product.id,
       title: product.title,
-      price: product.price,
+      price: Math.round(product.price * 100), // Convert dollars to cents for the backend
       thumbnail: product.thumbnail,
       quantity: 1,
     });
     setToast(`${product.title} added to cart`);
     setTimeout(() => setToast(null), 2200);
-  }, [addItem]);
+  }, [dispatch]);
 
   const toggleTag = (tag: string) => {
     setActiveTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]);
@@ -628,14 +614,14 @@ export default function StorefrontPage() {
 
       
       <nav className="nav">
-        <a href="/" className="nav-logo">
+        <Link to="/" className="nav-logo">
           <span className="nav-logo-dot" />
           commit&amp;conquer
-        </a>
+        </Link>
         <div className="nav-links">
-          <a href="/" className="nav-link active">Shop</a>
-          <a href="/collections" className="nav-link">Collections</a>
-          <a href="/about" className="nav-link">About</a>
+          <Link to="/" className="nav-link active">Shop</Link>
+          <Link to="/collections" className="nav-link">Collections</Link>
+          <Link to="/about" className="nav-link">About</Link>
         </div>
         <div className="nav-actions">
           <button className="cart-btn" onClick={() => setCartOpen(true)}>
@@ -665,7 +651,7 @@ export default function StorefrontPage() {
               <path d="M5 12h14M12 5l7 7-7 7"/>
             </svg>
           </a>
-          <a href="/about" className="btn-cta-ghost">Our Story</a>
+          <Link to="/about" className="btn-cta-ghost">Our Story</Link>
         </div>
       </section>
 
