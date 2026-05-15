@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-const ADMIN   = "/api/admin";
+const ADMIN   = "/api/v1/admin";
 const HEADERS = { "Content-Type": "application/json", "X-Admin-Secret": "admin_dev_secret" };
 
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
@@ -60,9 +60,9 @@ export default function AdminOrders() {
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
 
-  const action = async (orderId: string, type: "fulfill" | "cancel" | "refund") => {
+  const action = async (orderId: string, type: "fulfill" | "cancel" | "refund", amount?: number) => {
     try {
-      const body = type === "refund" ? JSON.stringify({ amount: 0, reason: "Customer request" }) : undefined;
+      const body = type === "refund" ? JSON.stringify({ amount, reason: "Customer request" }) : undefined;
       await fetch(`${ADMIN}/orders/${orderId}/${type}`, { method: "POST", headers: HEADERS, body });
       qc.invalidateQueries({ queryKey: ["admin-orders"] });
       showToast(`Order ${type}ed`);
@@ -138,7 +138,7 @@ export default function AdminOrders() {
                         <button onClick={() => action(order.id, "cancel")} style={s.cancelBtn}>Cancel</button>
                       )}
                       {order.status === "fulfilled" && (
-                        <button onClick={() => action(order.id, "refund")} style={s.cancelBtn}>Refund</button>
+                        <button onClick={() => action(order.id, "refund", order.total)} style={s.cancelBtn}>Refund</button>
                       )}
                     </div>
                   </td>
